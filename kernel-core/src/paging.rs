@@ -36,6 +36,7 @@ pub enum PageFlags {
     KernelReadWrite,
     Device,
     UserReadWrite,
+    UserReadExecute,
 }
 impl PageFlags {
     const fn bits(self) -> u64 {
@@ -43,6 +44,7 @@ impl PageFlags {
             Self::KernelReadWrite => PRESENT | WRITABLE | NO_EXECUTE,
             Self::Device => PRESENT | WRITABLE | NO_EXECUTE,
             Self::UserReadWrite => PRESENT | WRITABLE | USER | NO_EXECUTE,
+            Self::UserReadExecute => PRESENT | USER,
         }
     }
 }
@@ -84,6 +86,23 @@ pub fn map_user_page(virtual_address: u64, physical_address: u64) -> Result<(), 
         return Err(PagingError::InvalidUserAddress);
     }
     map_page(virtual_address, physical_address, PageFlags::UserReadWrite)
+}
+
+pub fn map_user_code_page(
+    virtual_address: u64,
+    physical_address: u64,
+) -> Result<(), PagingError> {
+    if virtual_address < FUTURE_USER_SPACE_BASE || virtual_address >= 0x0000_8000_0000_0000 {
+        return Err(PagingError::InvalidUserAddress);
+    }
+    map_page(virtual_address, physical_address, PageFlags::UserReadExecute)
+}
+
+pub fn write_physical_frame(physical_address: u64, source: &[u8]) {
+    let destination = (physical_address + unsafe { PHYSICAL_MEMORY_OFFSET }) as *mut u8;
+    unsafe {
+        core::ptr::copy_nonoverlapping(source.as_ptr(), destination, source.len());
+    }
 }
 
 fn map_page(

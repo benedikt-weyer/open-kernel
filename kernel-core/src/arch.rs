@@ -4,7 +4,56 @@ use crate::serial::{Com1, SerialOutput};
 
 const KERNEL_CODE: u64 = 0x08;
 const KERNEL_DATA: u16 = 0x10;
-static GDT: [u64; 3] = [0, 0x00AF_9B00_0000_FFFF, 0x00AF_9300_0000_FFFF];
+const USER_DATA: u64 = 0x1B;
+const USER_CODE: u64 = 0x23;
+const TSS_SELECTOR: u16 = 0x28;
+const IA32_EFER: u32 = 0xC000_0080;
+const IA32_STAR: u32 = 0xC000_0081;
+const IA32_LSTAR: u32 = 0xC000_0082;
+const IA32_FMASK: u32 = 0xC000_0084;
+const USER_RFLAGS: u64 = 1 << 9 | 1 << 1;
+const SYSCALL_STACK_SIZE: usize = 16 * 1024;
+
+static mut GDT: [u64; 7] = [
+    0,
+    0x00AF_9B00_0000_FFFF,
+    0x00CF_9300_0000_FFFF,
+    0x00CF_F300_0000_FFFF,
+    0x00AF_FB00_0000_FFFF,
+    0,
+    0,
+];
+
+#[repr(C, packed)]
+struct TaskStateSegment {
+    reserved_0: u32,
+    rsp: [u64; 3],
+    reserved_1: u64,
+    ist: [u64; 7],
+    reserved_2: u64,
+    reserved_3: u16,
+    io_map_base: u16,
+}
+static mut TSS: TaskStateSegment = TaskStateSegment {
+    reserved_0: 0,
+    rsp: [0; 3],
+    reserved_1: 0,
+    ist: [0; 7],
+    reserved_2: 0,
+    reserved_3: 0,
+    io_map_base: core::mem::size_of::<TaskStateSegment>() as u16,
+};
+#[repr(align(16))]
+#[allow(dead_code)]
+struct SyscallStack([u8; SYSCALL_STACK_SIZE]);
+#[unsafe(no_mangle)]
+static mut SYSCALL_STACK: SyscallStack = SyscallStack([0; SYSCALL_STACK_SIZE]);
+#[unsafe(no_mangle)]
+static mut USER_SYSCALL_STACK_POINTER: u64 = 0;
+#[unsafe(no_mangle)]
+static mut USER_SYSCALL_RIP: u64 = 0;
+#[unsafe(no_mangle)]
+static mut USER_SYSCALL_RFLAGS: u64 = 0;
 
 #[repr(C, packed)]
 struct DescriptorTablePointer {
@@ -57,6 +106,7 @@ unsafe extern "C" {
     fn x86_timer_irq_stub();
     fn x86_keyboard_irq_stub();
     fn x86_serial_irq_stub();
+    fn x86_syscall_stub();
 }
 global_asm!(
     r#"
@@ -98,6 +148,29 @@ x86_exception_stub:
 irq_stub x86_timer_irq_stub, 32
 irq_stub x86_keyboard_irq_stub, 33
 irq_stub x86_serial_irq_stub, 36
+.global x86_syscall_stub
+.type x86_syscall_stub, @function
+x86_syscall_stub:
+    mov %rsp, USER_SYSCALL_STACK_POINTER(%rip)
+    mov %rcx, USER_SYSCALL_RIP(%rip)
+    mov %r11, USER_SYSCALL_RFLAGS(%rip)
+    lea SYSCALL_STACK + 16384(%rip), %rsp
+    and $-16, %rsp
+    sub $8, %rsp
+    mov %rsi, %rdx
+    mov %rdi, %rsi
+    mov %rax, %rdi
+    call syscall_dispatch
+    add $8, %rsp
+    pushq $0x1B
+    pushq USER_SYSCALL_STACK_POINTER(%rip)
+    mov USER_SYSCALL_RFLAGS(%rip), %r11
+    and $0xED7, %r11
+    or $0x202, %r11
+    pushq %r11
+    pushq $0x23
+    pushq USER_SYSCALL_RIP(%rip)
+    iretq
 "#,
     options(att_syntax)
 );
@@ -107,11 +180,16 @@ impl Architecture for X86_64 {
         unsafe {
             asm!("cli", options(nomem, nostack));
         }
+        initialize_tss();
         let gdt = DescriptorTablePointer {
-            limit: (core::mem::size_of_val(&GDT) - 1) as u16,
-            base: GDT.as_ptr() as u64,
+            limit: (core::mem::size_of::<[u64; 7]>() - 1) as u16,
+            base: (&raw const GDT).cast::<u64>() as u64,
         };
         load_gdt(&gdt);
+        unsafe {
+            asm!("ltr {selector:x}", selector = in(reg) TSS_SELECTOR, options(nostack));
+        }
+        initialize_syscalls();
         let idt = &raw mut IDT;
         unsafe {
             for entry in (&mut *idt).iter_mut().take(32) {
@@ -141,6 +219,81 @@ impl Architecture for X86_64 {
             }
         }
     }
+}
+
+fn initialize_tss() {
+    unsafe {
+        (*(&raw mut TSS)).rsp[0] = (&raw const SYSCALL_STACK).cast::<u8>() as u64
+            + SYSCALL_STACK_SIZE as u64;
+        let base = (&raw const TSS).cast::<u8>() as u64;
+        let limit = (core::mem::size_of::<TaskStateSegment>() - 1) as u64;
+        let descriptor = limit & 0xFFFF
+            | (base & 0x00FF_FFFF) << 16
+            | 0x89 << 40
+            | ((limit >> 16) & 0xF) << 48
+            | ((base >> 24) & 0xFF) << 56;
+        (*(&raw mut GDT))[5] = descriptor;
+        (*(&raw mut GDT))[6] = base >> 32;
+    }
+}
+
+fn initialize_syscalls() {
+    let efer = read_msr(IA32_EFER) | 1 | (1 << 11);
+    unsafe {
+        write_msr(IA32_EFER, efer);
+        write_msr(IA32_STAR, (KERNEL_CODE << 32) | ((KERNEL_DATA as u64) << 48));
+        write_msr(IA32_LSTAR, x86_syscall_stub as *const () as u64);
+        write_msr(IA32_FMASK, (1 << 8) | (1 << 9) | (1 << 10) | (1 << 14) | (1 << 18));
+    }
+}
+
+pub unsafe fn enter_user_mode(entry: u64, stack_pointer: u64) -> ! {
+    unsafe {
+        asm!(
+            "push {user_data}",
+            "push {stack_pointer}",
+            "push {flags}",
+            "push {user_code}",
+            "push {entry}",
+            "iretq",
+            user_data = in(reg) USER_DATA,
+            stack_pointer = in(reg) stack_pointer,
+            flags = in(reg) USER_RFLAGS,
+            user_code = in(reg) USER_CODE,
+            entry = in(reg) entry,
+            options(noreturn),
+        );
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64) -> u64 {
+    match number {
+        1 => syscall_write(pointer, length),
+        2 => {
+            crate::scheduler::yield_now();
+            0
+        }
+        3 => {
+            Com1.write(b"open-kernel: user process exited\r\n");
+            X86_64::halt()
+        }
+        _ => u64::MAX,
+    }
+}
+
+fn syscall_write(pointer: u64, length: u64) -> u64 {
+    const USER_DATA_START: u64 = crate::FUTURE_USER_SPACE_BASE + crate::PAGE_SIZE;
+    const USER_DATA_END: u64 = USER_DATA_START + crate::PAGE_SIZE;
+    let Some(end) = pointer.checked_add(length) else {
+        return u64::MAX;
+    };
+    if pointer < USER_DATA_START || end > USER_DATA_END || length > 256 {
+        return u64::MAX;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(pointer as *const u8, length as usize) };
+    Com1.write(bytes);
+    length
 }
 
 pub fn timer_ticks() -> u64 {
@@ -246,5 +399,32 @@ unsafe fn outb(port: u16, value: u8) {
 unsafe fn outw(port: u16, value: u16) {
     unsafe {
         asm!("out dx, ax", in("dx") port, in("ax") value, options(nomem, nostack));
+    }
+}
+
+fn read_msr(msr: u32) -> u64 {
+    let low: u32;
+    let high: u32;
+    unsafe {
+        asm!(
+            "rdmsr",
+            in("ecx") msr,
+            out("eax") low,
+            out("edx") high,
+            options(nomem, nostack),
+        );
+    }
+    (u64::from(high) << 32) | u64::from(low)
+}
+
+unsafe fn write_msr(msr: u32, value: u64) {
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") value as u32,
+            in("edx") (value >> 32) as u32,
+            options(nomem, nostack),
+        );
     }
 }

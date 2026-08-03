@@ -81,6 +81,12 @@ pub fn boot(info: BootInfo) -> ! {
     Com1.write_usize(memory.tracked_frames);
     Com1.write(b"\r\n");
 
+    if matches!(info.status, BootStatus::Ready) {
+        if crate::user::run_demo().is_err() {
+            Com1.write(b"open-kernel: could not start user process\r\n");
+        }
+    }
+
     match info.display {
         Display::None => {}
         Display::VgaText => paint_vga(info.bootloader.as_bytes(), info.status),
