@@ -113,6 +113,27 @@ pub(crate) fn open(path: &[u8], flags: u64) -> u64 {
     u64::MAX
 }
 
+pub(crate) fn spawn(path: &[u8]) -> u64 {
+    let Some(path) = resolve_path(path) else {
+        return u64::MAX;
+    };
+    let Some(image) = crate::vfs_open(path) else {
+        return u64::MAX;
+    };
+    let Ok(address_space) = crate::create_user_address_space() else {
+        return u64::MAX;
+    };
+    let Some(process) = crate::create_process(address_space) else {
+        return u64::MAX;
+    };
+    let Ok(loaded) = crate::load_user_elf_into(image, address_space, process) else {
+        return u64::MAX;
+    };
+    crate::spawn_user_for_process(process, loaded.entry, 0, 0, Some(loaded.stack_pointer))
+        .map(|_| process as u64)
+        .unwrap_or(u64::MAX)
+}
+
 pub(crate) fn chdir(path: &[u8]) -> u64 {
     let Some(path) = resolve_path(path) else {
         return u64::MAX;

@@ -49,7 +49,8 @@ pub use paging::{
 };
 pub use scheduler::{
     Process, ProcessId, TaskEntry, ThreadId, ThreadState, UserContext, block_current as block_current_thread,
-    create_process, exit_current as exit_current_thread, process_address_space, spawn as spawn_task, start as start_scheduler,
+    create_process, exit_current as exit_current_thread, process_address_space, spawn as spawn_task,
+    spawn_user_for_process, start as start_scheduler,
     current_id as current_thread_id, process_id as thread_process_id, state as thread_state,
     wake as wake_thread, yield_now,
 };

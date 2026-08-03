@@ -271,6 +271,21 @@ pub fn spawn_user(
     if !crate::is_user_executable(entry) || (tls_base != 0 && !crate::is_user_mapped(tls_base)) {
         return None;
     }
+    spawn_user_for_process(USER_PROCESS_ID, entry, argument, tls_base, initial_stack)
+}
+
+/// Enqueues the initial thread of a process whose ELF and stack have already
+/// been mapped into its address space.
+pub fn spawn_user_for_process(
+    process: ProcessId,
+    entry: u64,
+    argument: u64,
+    tls_base: u64,
+    initial_stack: Option<u64>,
+) -> Option<ThreadId> {
+    if process_address_space(process).is_none() {
+        return None;
+    }
     unsafe {
         for slot in 1..MAX_THREADS {
             let thread = &mut (*(&raw mut THREADS))[slot];
@@ -294,7 +309,7 @@ pub fn spawn_user(
             *thread = Thread {
                 context: Context { stack_pointer: initial_kernel_stack as u64, ..Context::EMPTY },
                 entry: None,
-                process: Some(USER_PROCESS_ID),
+                process: Some(process),
                 user_context: UserContext {
                     rip: entry,
                     rsp: user_stack,

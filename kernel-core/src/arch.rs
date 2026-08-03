@@ -422,6 +422,7 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         30 => syscall_set_tls_base(pointer),
         31 => syscall_getrandom(pointer, length),
         32 => syscall_vfs_stat(pointer, length, argument),
+        33 => syscall_process_spawn(pointer, length),
         _ => u64::MAX,
     }
 }
@@ -570,6 +571,13 @@ fn syscall_vfs_stat(fd: u64, buffer: u64, length: u64) -> u64 {
         return u64::MAX;
     };
     crate::user::stat(fd, output)
+}
+
+fn syscall_process_spawn(path: u64, length: u64) -> u64 {
+    let Some(bytes) = user_bytes(path, length, 64) else {
+        return u64::MAX;
+    };
+    crate::user::spawn(bytes)
 }
 
 fn syscall_write(pointer: u64, length: u64) -> u64 {
