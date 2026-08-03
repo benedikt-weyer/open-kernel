@@ -9,14 +9,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
-name = "bootstrap"
-version = "0.1.0"
-
-[[package]]
 name = "elf"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55dd888a213fc57e957abf2aa305ee3e8a28dbe05687a251f33b637cd46b0070"
+
+[[package]]
+name = "kernel-core"
+version = "0.1.0"
 
 [[package]]
 name = "limine"
@@ -25,6 +25,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af6d2ee42712e7bd2c787365cd1dab06ef59a61becbf87bec7b32b970bd2594b"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "limine-adapter"
+version = "0.1.0"
+dependencies = [
+ "kernel-core",
+ "limine",
 ]
 
 [[package]]
@@ -49,6 +57,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "multiboot2-adapter"
+version = "0.1.0"
+dependencies = [
+ "kernel-core",
+ "multiboot2",
+ "multiboot2-adapter-bootstrap",
+]
+
+[[package]]
+name = "multiboot2-adapter-bootstrap"
+version = "0.1.0"
+
+[[package]]
 name = "multiboot2-common"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -56,21 +77,6 @@ checksum = "cb473e539229614e212f22ee3a55b8c8741d1144e8e8aa8fd044bc37f7ea4e18"
 dependencies = [
  "ptr_meta",
  "thiserror",
-]
-
-[[package]]
-name = "open-kernel"
-version = "0.1.0"
-dependencies = [
- "bootstrap",
- "multiboot2",
-]
-
-[[package]]
-name = "open-kernel-limine"
-version = "0.1.0"
-dependencies = [
- "limine",
 ]
 
 [[package]]

@@ -19,12 +19,12 @@ LIMINE_DIR=$(limine --print-datadir)
 rm -rf "$ISO_ROOT"
 mkdir -p "$BUILD_DIR" "$ISO_ROOT/boot/limine" "$ISO_ROOT/EFI/BOOT"
 
-cargo rustc --manifest-path "$ROOT_DIR/kernel-limine/Cargo.toml" --release \
-    --bin open-kernel-limine -- -C relocation-model=static -C code-model=kernel \
+cargo rustc --manifest-path "$ROOT_DIR/limine-adapter/Cargo.toml" --release \
+    --bin limine-adapter -- -C relocation-model=static -C code-model=kernel \
     -C no-redzone=yes -C linker=ld -C link-arg=-melf_x86_64 \
     -C link-arg=-T"$ROOT_DIR/linker-limine.ld" -C link-arg=-nostdlib \
     -C link-arg=-z -C link-arg=max-page-size=0x1000
-cp "$ROOT_DIR/target/release/open-kernel-limine" "$KERNEL"
+cp "$ROOT_DIR/target/release/limine-adapter" "$KERNEL"
 
 cp "$KERNEL" "$ISO_ROOT/boot/open-kernel-limine.elf"
 cp "$ROOT_DIR/limine.conf" "$ISO_ROOT/boot/limine/limine.conf"

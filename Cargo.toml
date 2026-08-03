@@ -1,5 +1,10 @@
 [workspace]
-members = ["bootstrap", "kernel64", "kernel-limine"]
+members = [
+    "multiboot2-adapter-bootstrap",
+    "kernel-core",
+    "multiboot2-adapter",
+    "limine-adapter",
+]
 resolver = "3"
 
 [profile.dev]

@@ -18,13 +18,13 @@ rm -rf "$ISO_ROOT"
 mkdir -p "$BUILD_DIR" "$ISO_ROOT/boot/grub"
 
 # Cargo resolves the crate graph and performs the custom freestanding link.
-cargo rustc --manifest-path "$ROOT_DIR/kernel64/Cargo.toml" --release \
-    --bin open-kernel -- \
+cargo rustc --manifest-path "$ROOT_DIR/multiboot2-adapter/Cargo.toml" --release \
+    --bin multiboot2-adapter -- \
     -C relocation-model=static \
     -C linker=ld -C link-arg=-melf_x86_64 \
     -C link-arg=-T"$ROOT_DIR/linker.ld" -C link-arg=-nostdlib \
     -C link-arg=-z -C link-arg=max-page-size=0x1000
-cp "$ROOT_DIR/target/release/open-kernel" "$KERNEL"
+cp "$ROOT_DIR/target/release/multiboot2-adapter" "$KERNEL"
 
 if ! grub-file --is-x86-multiboot2 "$KERNEL"; then
     printf 'Kernel is not a valid x86_64 Multiboot2 image.\n' >&2

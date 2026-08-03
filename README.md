@@ -4,9 +4,12 @@ A minimal Rust x86_64 kernel that boots through GRUB using Multiboot2. It uses
 the `multiboot2` crate to validate GRUB's boot information, clears the VGA text
 buffer, and displays a short status message.
 
-The workspace separates the boot path from the kernel: `bootstrap` contains the
-32-bit Multiboot entry code and long-mode transition, while `kernel64` contains
-the x86_64 Rust kernel.
+The workspace separates bootloader adapters from the shared kernel:
+`kernel-core` owns the bootloader-neutral kernel entry, display, serial, and
+halt logic. `multiboot2-adapter` translates Multiboot2 data, while
+`limine-adapter` translates Limine protocol data. `multiboot2-adapter-bootstrap`
+contains the 32-bit Multiboot
+entry code and long-mode transition needed only by the GRUB path.
 
 ## Build a bootable ISO
 
@@ -26,7 +29,7 @@ nix develop
 scripts/build-limine-iso
 ```
 
-The Limine protocol boots `kernel-limine` directly in 64-bit long mode. Its ISO
+The Limine protocol boots `limine-adapter` directly in 64-bit long mode. Its ISO
 is written to `build/open-kernel-limine.iso`.
 
 ## Run it

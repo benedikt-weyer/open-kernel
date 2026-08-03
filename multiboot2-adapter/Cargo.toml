@@ -1,0 +1,9 @@
+[package]
+name = "multiboot2-adapter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+multiboot2-adapter-bootstrap = { path = "../multiboot2-adapter-bootstrap" }
+kernel-core = { path = "../kernel-core" }
+multiboot2 = { version = "0.25.0", default-features = false }
