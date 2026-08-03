@@ -2,11 +2,22 @@
 #![no_main]
 
 use core::{arch::asm, panic::PanicInfo};
-use kernel_core::{BootInfo, BootStatus, Display, Framebuffer};
+use kernel_core::{
+    BootInfo, BootStatus, Display, Framebuffer, MemoryRegion, MemoryRegionKind, PhysicalMemoryRange,
+};
 use limine::{
     BaseRevision,
-    request::{EntryPointRequest, FramebufferRequest, RequestsEndMarker, RequestsStartMarker},
+    memory_map::EntryType,
+    request::{
+        EntryPointRequest, ExecutableAddressRequest, FramebufferRequest, MemoryMapRequest,
+        RequestsEndMarker, RequestsStartMarker,
+    },
 };
+
+unsafe extern "C" {
+    static kernel_start: u8;
+    static kernel_end: u8;
+}
 
 #[used]
 #[unsafe(link_section = ".limine_requests_start")]
@@ -19,6 +30,14 @@ static BASE_REVISION: BaseRevision = BaseRevision::new();
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+static MEMORY_MAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+static EXECUTABLE_ADDRESS_REQUEST: ExecutableAddressRequest = ExecutableAddressRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -51,6 +70,36 @@ pub extern "C" fn limine_entry() -> ! {
             ))
         })
         .unwrap_or(Display::None);
+
+    let kernel_start_address = &raw const kernel_start as u64;
+    let kernel_end_address = &raw const kernel_end as u64;
+    let kernel_range = EXECUTABLE_ADDRESS_REQUEST
+        .get_response()
+        .map(|response| {
+            PhysicalMemoryRange::new(
+                response.physical_base() + (kernel_start_address - response.virtual_base()),
+                kernel_end_address - kernel_start_address,
+            )
+        })
+        .unwrap_or(PhysicalMemoryRange::new(0, 0));
+    kernel_core::initialize_physical_memory(
+        MEMORY_MAP_REQUEST
+            .get_response()
+            .into_iter()
+            .flat_map(|response| response.entries().iter())
+            .map(|entry| {
+                MemoryRegion::new(
+                    entry.base,
+                    entry.length,
+                    if entry.entry_type == EntryType::USABLE {
+                        MemoryRegionKind::Usable
+                    } else {
+                        MemoryRegionKind::Reserved
+                    },
+                )
+            }),
+        [kernel_range],
+    );
 
     kernel_core::boot(BootInfo::new(display, "Limine", status));
 }

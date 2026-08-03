@@ -10,6 +10,10 @@ const VGA_TEXT_BUFFER: *mut u16 = 0xB8000 as *mut u16;
 const VGA_COLOR: u16 = 0x0F00;
 const GDT_KERNEL_CODE: u64 = 0x08;
 const GDT_KERNEL_DATA: u16 = 0x10;
+pub const PAGE_SIZE: u64 = 4096;
+const MAX_PHYSICAL_ADDRESS: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_PHYSICAL_FRAMES: usize = (MAX_PHYSICAL_ADDRESS / PAGE_SIZE) as usize;
+const FRAME_BITMAP_BYTES: usize = MAX_PHYSICAL_FRAMES / 8;
 
 static GDT: [u64; 3] = [0, 0x00AF_9B00_0000_FFFF, 0x00AF_9300_0000_FFFF];
 
@@ -54,6 +58,52 @@ impl IdtEntry {
 }
 
 static mut IDT: [IdtEntry; 256] = [IdtEntry::MISSING; 256];
+static mut FRAME_BITMAP: [u8; FRAME_BITMAP_BYTES] = [0; FRAME_BITMAP_BYTES];
+static mut MEMORY_STATS: PhysicalMemoryStats = PhysicalMemoryStats::EMPTY;
+
+#[derive(Clone, Copy)]
+pub enum MemoryRegionKind {
+    Usable,
+    Reserved,
+}
+
+#[derive(Clone, Copy)]
+pub struct MemoryRegion {
+    pub base: u64,
+    pub length: u64,
+    pub kind: MemoryRegionKind,
+}
+
+impl MemoryRegion {
+    pub const fn new(base: u64, length: u64, kind: MemoryRegionKind) -> Self {
+        Self { base, length, kind }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct PhysicalMemoryRange {
+    pub base: u64,
+    pub length: u64,
+}
+
+impl PhysicalMemoryRange {
+    pub const fn new(base: u64, length: u64) -> Self {
+        Self { base, length }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct PhysicalMemoryStats {
+    pub free_frames: usize,
+    pub tracked_frames: usize,
+}
+
+impl PhysicalMemoryStats {
+    const EMPTY: Self = Self {
+        free_frames: 0,
+        tracked_frames: MAX_PHYSICAL_FRAMES,
+    };
+}
 
 unsafe extern "C" {
     fn x86_exception_stub();
@@ -134,6 +184,12 @@ pub fn boot(info: BootInfo) -> ! {
     serial_write(b"open-kernel: ");
     serial_write(info.bootloader.as_bytes());
     serial_write(b" entry reached\r\n");
+    let memory = physical_memory_stats();
+    serial_write(b"open-kernel: physical frames free ");
+    serial_write_usize(memory.free_frames);
+    serial_write(b" of ");
+    serial_write_usize(memory.tracked_frames);
+    serial_write(b"\r\n");
 
     match info.display {
         Display::None => {}
@@ -162,6 +218,110 @@ pub fn halt() -> ! {
 pub fn panic(_: &PanicInfo) -> ! {
     serial_write(b"open-kernel: panic\r\n");
     halt()
+}
+
+pub fn initialize_physical_memory(
+    regions: impl IntoIterator<Item = MemoryRegion>,
+    reserved_ranges: impl IntoIterator<Item = PhysicalMemoryRange>,
+) -> PhysicalMemoryStats {
+    let bitmap = &raw mut FRAME_BITMAP;
+    unsafe {
+        for byte in &mut *bitmap {
+            write_volatile(byte, u8::MAX);
+        }
+    }
+
+    for region in regions {
+        if matches!(region.kind, MemoryRegionKind::Usable) {
+            mark_range(region.base, region.length, false);
+        }
+    }
+
+    mark_range(0, 1024 * 1024, true);
+    for range in reserved_ranges {
+        mark_range(range.base, range.length, true);
+    }
+
+    let mut free_frames = 0;
+    for frame in 0..MAX_PHYSICAL_FRAMES {
+        if !frame_is_reserved(frame) {
+            free_frames += 1;
+        }
+    }
+
+    let stats = PhysicalMemoryStats {
+        free_frames,
+        tracked_frames: MAX_PHYSICAL_FRAMES,
+    };
+    unsafe {
+        core::ptr::write_volatile(&raw mut MEMORY_STATS, stats);
+    }
+    stats
+}
+
+pub fn physical_memory_stats() -> PhysicalMemoryStats {
+    unsafe { core::ptr::read_volatile(&raw const MEMORY_STATS) }
+}
+
+pub fn allocate_physical_frame() -> Option<u64> {
+    for frame in 0..MAX_PHYSICAL_FRAMES {
+        if !frame_is_reserved(frame) {
+            set_frame_reserved(frame, true);
+            unsafe {
+                let stats = &raw mut MEMORY_STATS;
+                (*stats).free_frames -= 1;
+            }
+            return Some(frame as u64 * PAGE_SIZE);
+        }
+    }
+    None
+}
+
+pub fn free_physical_frame(address: u64) {
+    if address % PAGE_SIZE != 0 || address >= MAX_PHYSICAL_ADDRESS {
+        return;
+    }
+
+    let frame = (address / PAGE_SIZE) as usize;
+    if frame_is_reserved(frame) {
+        set_frame_reserved(frame, false);
+        unsafe {
+            let stats = &raw mut MEMORY_STATS;
+            (*stats).free_frames += 1;
+        }
+    }
+}
+
+fn mark_range(base: u64, length: u64, reserved: bool) {
+    let start = base.saturating_add(PAGE_SIZE - 1) / PAGE_SIZE;
+    let end = base.saturating_add(length).min(MAX_PHYSICAL_ADDRESS) / PAGE_SIZE;
+
+    for frame in start.min(MAX_PHYSICAL_FRAMES as u64)..end {
+        set_frame_reserved(frame as usize, reserved);
+    }
+}
+
+fn frame_is_reserved(frame: usize) -> bool {
+    let bitmap = &raw const FRAME_BITMAP;
+    let byte = unsafe { core::ptr::read_volatile((*bitmap).as_ptr().add(frame / 8)) };
+    byte & (1 << (frame % 8)) != 0
+}
+
+fn set_frame_reserved(frame: usize, reserved: bool) {
+    let bitmap = &raw mut FRAME_BITMAP;
+    let byte = unsafe { (*bitmap).as_mut_ptr().add(frame / 8) };
+    let mask = 1 << (frame % 8);
+    let value = unsafe { core::ptr::read_volatile(byte) };
+    unsafe {
+        write_volatile(
+            byte,
+            if reserved {
+                value | mask
+            } else {
+                value & !mask
+            },
+        );
+    }
 }
 
 #[unsafe(no_mangle)]

@@ -4,6 +4,7 @@ ENTRY(_start)
 SECTIONS
 {
   . = 1M;
+  kernel_start = .;
 
   .multiboot ALIGN(8) :
   {
@@ -22,6 +23,8 @@ SECTIONS
     *(COMMON)
     *(.bss*)
   }
+
+  kernel_end = .;
 
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }
 }
