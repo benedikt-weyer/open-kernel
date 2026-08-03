@@ -13,7 +13,7 @@ Build
 
 Run
   qemu-system-x86_64 -cdrom build/open-kernel.iso
-  run                      Build the ISO and start it in QEMU.
+  run-grub                 Build the GRUB ISO and start it in QEMU.
   run-lim                  Build the Limine ISO and start it in QEMU.
 
 Nix

@@ -35,11 +35,11 @@ is written to `build/open-kernel-limine.iso`.
 ## Run it
 
 ```sh
-scripts/run
+scripts/run-grub
 ```
 
 Additional QEMU options can be passed through, for example
-`scripts/run -m 256M`.
+`scripts/run-grub -m 256M`.
 
 The build uses Cargo to compile and link the kernel with GNU `ld`, then uses
 GRUB's `grub-file` and
