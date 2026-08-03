@@ -333,14 +333,10 @@ fn syscall_spawn() -> u64 {
 
 fn syscall_sleep(ticks: u64) -> u64 {
     let start = timer_ticks();
-    unsafe {
-        asm!("sti", options(nomem, nostack));
-    }
     while timer_ticks().wrapping_sub(start) < ticks {
-        crate::scheduler::yield_now();
-    }
-    unsafe {
-        asm!("cli", options(nomem, nostack));
+        unsafe {
+            asm!("sti", "hlt", "cli", options(nomem, nostack));
+        }
     }
     0
 }
