@@ -109,6 +109,43 @@ pub fn map_user_page_with_flags(
     map_page(virtual_address, physical_address, flags)
 }
 
+/// Creates an empty user address space while retaining every kernel mapping
+/// from the currently active page table.
+pub fn create_user_address_space() -> Result<u64, PagingError> {
+    let frame = allocate_physical_frame().ok_or(PagingError::FrameAllocationFailed)?;
+    zero_table(frame);
+    let source = unsafe { table_mut(read_cr3() & ENTRY_ADDRESS_MASK) };
+    let destination = unsafe { table_mut(frame) };
+    // Canonical lower-half entries are user mappings; the upper half belongs
+    // to the kernel and is shared by all processes.
+    for index in 256..512 {
+        destination.0[index] = source.0[index];
+    }
+    Ok(frame)
+}
+
+pub fn active_address_space() -> u64 {
+    read_cr3() & ENTRY_ADDRESS_MASK
+}
+
+pub unsafe fn switch_address_space(address_space: u64) {
+    unsafe {
+        asm!("mov cr3, {}", in(reg) address_space, options(nostack));
+    }
+}
+
+pub fn map_user_page_in(
+    address_space: u64,
+    virtual_address: u64,
+    physical_address: u64,
+    flags: PageFlags,
+) -> Result<(), PagingError> {
+    if virtual_address < FUTURE_USER_SPACE_BASE || virtual_address >= USER_SPACE_END {
+        return Err(PagingError::InvalidUserAddress);
+    }
+    map_page_in(address_space, virtual_address, physical_address, flags)
+}
+
 pub fn write_physical_frame(physical_address: u64, source: &[u8]) {
     let destination = (physical_address + unsafe { PHYSICAL_MEMORY_OFFSET }) as *mut u8;
     for (offset, byte) in source.iter().enumerate() {
@@ -259,6 +296,38 @@ fn map_page(
     unsafe {
         asm!("invlpg [{}]", in(reg) virtual_address, options(nostack));
     }
+    Ok(())
+}
+
+fn map_page_in(
+    address_space: u64,
+    virtual_address: u64,
+    physical_address: u64,
+    flags: PageFlags,
+) -> Result<(), PagingError> {
+    let indices = [
+        (virtual_address >> 39) & 0x1FF,
+        (virtual_address >> 30) & 0x1FF,
+        (virtual_address >> 21) & 0x1FF,
+        (virtual_address >> 12) & 0x1FF,
+    ];
+    let mut table = unsafe { table_mut(address_space & ENTRY_ADDRESS_MASK) };
+    for index in indices[..3].iter().copied() {
+        let entry = &mut table.0[index as usize];
+        if *entry & PRESENT == 0 {
+            let frame = allocate_physical_frame().ok_or(PagingError::FrameAllocationFailed)?;
+            *entry = frame | PRESENT | WRITABLE | if flags.bits() & USER != 0 { USER } else { 0 };
+            zero_table(frame);
+        } else if *entry & HUGE_PAGE != 0 {
+            return Err(PagingError::HugePageConflict);
+        }
+        table = unsafe { table_mut(*entry & ENTRY_ADDRESS_MASK) };
+    }
+    let leaf = &mut table.0[indices[3] as usize];
+    if *leaf & PRESENT != 0 {
+        return Err(PagingError::AlreadyMapped);
+    }
+    *leaf = (physical_address & ENTRY_ADDRESS_MASK) | flags.bits();
     Ok(())
 }
 
