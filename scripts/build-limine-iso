@@ -49,7 +49,7 @@ cargo rustc --manifest-path "$USER_MANIFEST" --release -- \
         -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib \
         -C link-arg=-z -C link-arg=max-page-size=0x1000
 if [ "$OPENKERNEL_STD" = 1 ]; then
-    (cd "$RUST_FORK" && BOOTSTRAP_SKIP_TARGET_SANITY=1 ./x build library --target x86_64-unknown-openkernel)
+    (cd "$RUST_FORK" && BOOTSTRAP_SKIP_TARGET_SANITY=1 ./x build library/std --target x86_64-unknown-openkernel)
     RUSTC="$OPENKERNEL_RUSTC" cargo rustc --manifest-path "$ROOT_DIR/std-program/Cargo.toml" --release \
         --target x86_64-unknown-openkernel -- -C relocation-model=static -C code-model=large -C linker=ld \
         -C link-arg=-melf_x86_64 -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib
