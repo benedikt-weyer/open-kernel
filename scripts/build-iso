@@ -5,6 +5,7 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BUILD_DIR="$ROOT_DIR/build"
 ISO_ROOT="$BUILD_DIR/iso-root"
 KERNEL="$BUILD_DIR/open-kernel.elf"
+USER_PROGRAM="$BUILD_DIR/init.elf"
 ISO="$BUILD_DIR/open-kernel.iso"
 
 for command in cargo ld grub-file grub-mkrescue rustc xorriso; do
@@ -24,7 +25,13 @@ cargo rustc --manifest-path "$ROOT_DIR/multiboot2-adapter/Cargo.toml" --release 
     -C linker=ld -C link-arg=-melf_x86_64 \
     -C link-arg=-T"$ROOT_DIR/linker.ld" -C link-arg=-nostdlib \
     -C link-arg=-z -C link-arg=max-page-size=0x1000
+cargo rustc --manifest-path "$ROOT_DIR/user-program/Cargo.toml" --release \
+    --bin user-program -- \
+    -C relocation-model=static -C linker=ld -C link-arg=-melf_x86_64 \
+    -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib \
+    -C link-arg=-z -C link-arg=max-page-size=0x1000
 cp "$ROOT_DIR/target/release/multiboot2-adapter" "$KERNEL"
+cp "$ROOT_DIR/target/release/user-program" "$USER_PROGRAM"
 
 if ! grub-file --is-x86-multiboot2 "$KERNEL"; then
     printf 'Kernel is not a valid x86_64 Multiboot2 image.\n' >&2
@@ -32,6 +39,7 @@ if ! grub-file --is-x86-multiboot2 "$KERNEL"; then
 fi
 
 cp "$KERNEL" "$ISO_ROOT/boot/open-kernel.elf"
+cp "$USER_PROGRAM" "$ISO_ROOT/boot/init.elf"
 cp "$ROOT_DIR/grub.cfg" "$ISO_ROOT/boot/grub/grub.cfg"
 grub-mkrescue -o "$ISO" "$ISO_ROOT"
 

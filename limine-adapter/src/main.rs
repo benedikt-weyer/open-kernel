@@ -11,7 +11,7 @@ use limine::{
     memory_map::EntryType,
     request::{
         EntryPointRequest, ExecutableAddressRequest, FramebufferRequest, HhdmRequest,
-        MemoryMapRequest, RequestsEndMarker, RequestsStartMarker,
+        MemoryMapRequest, ModuleRequest, RequestsEndMarker, RequestsStartMarker,
     },
 };
 
@@ -43,6 +43,10 @@ static EXECUTABLE_ADDRESS_REQUEST: ExecutableAddressRequest = ExecutableAddressR
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+static MODULE_REQUEST: ModuleRequest = ModuleRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -87,6 +91,10 @@ pub extern "C" fn limine_entry() -> ! {
             )
         })
         .unwrap_or(PhysicalMemoryRange::new(0, 0));
+    let physical_offset = HHDM_REQUEST
+        .get_response()
+        .map(|response| response.offset())
+        .unwrap_or(0);
     kernel_core::initialize_physical_memory(
         MEMORY_MAP_REQUEST
             .get_response()
@@ -103,18 +111,37 @@ pub extern "C" fn limine_entry() -> ! {
                     },
                 )
             }),
-        [kernel_range],
+        [kernel_range].into_iter().chain(
+            MODULE_REQUEST
+                .get_response()
+                .into_iter()
+                .flat_map(|response| response.modules().iter())
+                .map(|module| {
+                    let address = module.addr() as u64;
+                    PhysicalMemoryRange::new(
+                        if address >= physical_offset {
+                            address - physical_offset
+                        } else {
+                            address
+                        },
+                        module.size(),
+                    )
+                }),
+        ),
     );
-    let physical_offset = HHDM_REQUEST
-        .get_response()
-        .map(|response| response.offset())
-        .unwrap_or(0);
     let _ = kernel_core::initialize_virtual_memory(PagingConfig::new(
         physical_offset,
         kernel_start_address,
         kernel_range.base,
         kernel_range.length,
     ));
+    if let Some(response) = MODULE_REQUEST.get_response() {
+        for module in response.modules() {
+            let data =
+                unsafe { core::slice::from_raw_parts(module.addr() as *const u8, module.size() as usize) };
+            let _ = kernel_core::register_boot_file("init", data);
+        }
+    }
 
     kernel_core::boot(BootInfo::new(display, "Limine", status));
 }

@@ -66,7 +66,14 @@ pub extern "C" fn kernel_main(magic: u32, boot_info_address: usize) -> ! {
                     [PhysicalMemoryRange::new(
                         kernel_start_address,
                         kernel_end_address - kernel_start_address,
-                    )],
+                    )]
+                    .into_iter()
+                    .chain(boot_info.module_tags().map(|module| {
+                        PhysicalMemoryRange::new(
+                            module.start_address() as u64,
+                            module.module_size() as u64,
+                        )
+                    })),
                 );
                 let _ = kernel_core::initialize_virtual_memory(PagingConfig::new(
                     0,
@@ -74,6 +81,15 @@ pub extern "C" fn kernel_main(magic: u32, boot_info_address: usize) -> ! {
                     kernel_start_address,
                     kernel_end_address - kernel_start_address,
                 ));
+                for module in boot_info.module_tags() {
+                    let data = unsafe {
+                        core::slice::from_raw_parts(
+                            module.start_address() as *const u8,
+                            module.module_size() as usize,
+                        )
+                    };
+                    let _ = kernel_core::register_boot_file("init", data);
+                }
                 (display, BootStatus::Ready)
             }
             Err(_) => {

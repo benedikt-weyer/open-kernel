@@ -1,0 +1,160 @@
+use crate::{
+    FUTURE_USER_SPACE_BASE, PAGE_SIZE, PageFlags, PagingError, allocate_physical_frame,
+    map_user_page_with_flags, write_physical_frame, zero_physical_frame,
+};
+
+const ELF_HEADER_SIZE: usize = 64;
+const PROGRAM_HEADER_SIZE: usize = 56;
+const ELF_MACHINE_X86_64: u16 = 0x3E;
+const ELF_TYPE_EXECUTABLE: u16 = 2;
+const PROGRAM_HEADER_LOAD: u32 = 1;
+const PROGRAM_FLAG_EXECUTE: u32 = 1;
+const PROGRAM_FLAG_WRITE: u32 = 2;
+const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
+const USER_STACK_TOP: u64 = USER_SPACE_END - PAGE_SIZE;
+const USER_STACK_PAGES: u64 = 4;
+
+#[derive(Clone, Copy)]
+pub struct LoadedImage {
+    pub entry: u64,
+    pub stack_pointer: u64,
+}
+
+#[derive(Clone, Copy)]
+pub enum ElfError {
+    InvalidHeader,
+    UnsupportedExecutable,
+    InvalidProgramHeader,
+    InvalidSegment,
+    NoExecutableSegment,
+    Paging(PagingError),
+}
+
+impl From<PagingError> for ElfError {
+    fn from(error: PagingError) -> Self {
+        Self::Paging(error)
+    }
+}
+
+pub fn load_user_elf(image: &[u8]) -> Result<LoadedImage, ElfError> {
+    if image.len() < ELF_HEADER_SIZE
+        || image[..4] != *b"\x7FELF"
+        || image[4] != 2
+        || image[5] != 1
+        || image[6] != 1
+        || read_u16(image, 16)? != ELF_TYPE_EXECUTABLE
+        || read_u16(image, 18)? != ELF_MACHINE_X86_64
+        || read_u32(image, 20)? != 1
+        || read_u16(image, 52)? != ELF_HEADER_SIZE as u16
+        || read_u16(image, 54)? != PROGRAM_HEADER_SIZE as u16
+    {
+        return Err(ElfError::InvalidHeader);
+    }
+
+    let entry = read_u64(image, 24)?;
+    let program_header_offset = read_u64(image, 32)? as usize;
+    let program_header_count = read_u16(image, 56)? as usize;
+    let table_size = program_header_count
+        .checked_mul(PROGRAM_HEADER_SIZE)
+        .ok_or(ElfError::InvalidHeader)?;
+    let table_end = program_header_offset
+        .checked_add(table_size)
+        .ok_or(ElfError::InvalidHeader)?;
+    if table_end > image.len() {
+        return Err(ElfError::InvalidHeader);
+    }
+
+    let mut entry_is_executable = false;
+    for index in 0..program_header_count {
+        let header_offset = program_header_offset + index * PROGRAM_HEADER_SIZE;
+        if read_u32(image, header_offset)? != PROGRAM_HEADER_LOAD {
+            continue;
+        }
+        let flags = read_u32(image, header_offset + 4)?;
+        let file_offset = read_u64(image, header_offset + 8)?;
+        let virtual_address = read_u64(image, header_offset + 16)?;
+        let file_size = read_u64(image, header_offset + 32)?;
+        let memory_size = read_u64(image, header_offset + 40)?;
+        if memory_size < file_size {
+            return Err(ElfError::InvalidSegment);
+        }
+        let file_end = file_offset
+            .checked_add(file_size)
+            .ok_or(ElfError::InvalidSegment)?;
+        let memory_end = virtual_address
+            .checked_add(memory_size)
+            .ok_or(ElfError::InvalidSegment)?;
+        if memory_size == 0
+            || file_end > image.len() as u64
+            || virtual_address < FUTURE_USER_SPACE_BASE
+            || memory_end > USER_SPACE_END
+        {
+            return Err(ElfError::InvalidSegment);
+        }
+        if flags & PROGRAM_FLAG_EXECUTE != 0 && entry >= virtual_address && entry < memory_end {
+            entry_is_executable = true;
+        }
+
+        let page_flags = match (flags & PROGRAM_FLAG_WRITE != 0, flags & PROGRAM_FLAG_EXECUTE != 0)
+        {
+            (false, false) => PageFlags::UserReadOnly,
+            (true, false) => PageFlags::UserReadWrite,
+            (false, true) => PageFlags::UserReadExecute,
+            (true, true) => PageFlags::UserReadWriteExecute,
+        };
+        let first_page = virtual_address & !(PAGE_SIZE - 1);
+        let last_page = (memory_end - 1) & !(PAGE_SIZE - 1);
+        let mut page = first_page;
+        loop {
+            let frame = allocate_physical_frame().ok_or(PagingError::FrameAllocationFailed)?;
+            zero_physical_frame(frame);
+            map_user_page_with_flags(page, frame, page_flags)?;
+
+            let copy_start = page.max(virtual_address);
+            let copy_end = (page + PAGE_SIZE).min(virtual_address + file_size);
+            if copy_start < copy_end {
+                let source_offset = file_offset + copy_start - virtual_address;
+                let byte_count = (copy_end - copy_start) as usize;
+                write_physical_frame(
+                    frame + copy_start - page,
+                    &image[source_offset as usize..source_offset as usize + byte_count],
+                );
+            }
+            if page == last_page {
+                break;
+            }
+            page += PAGE_SIZE;
+        }
+    }
+
+    if !entry_is_executable {
+        return Err(ElfError::NoExecutableSegment);
+    }
+    for index in 1..=USER_STACK_PAGES {
+        let address = USER_STACK_TOP - index * PAGE_SIZE;
+        let frame = allocate_physical_frame().ok_or(PagingError::FrameAllocationFailed)?;
+        zero_physical_frame(frame);
+        map_user_page_with_flags(address, frame, PageFlags::UserReadWrite)?;
+    }
+    Ok(LoadedImage {
+        entry,
+        stack_pointer: USER_STACK_TOP,
+    })
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, ElfError> {
+    let data = bytes.get(offset..offset + 2).ok_or(ElfError::InvalidHeader)?;
+    Ok(u16::from_le_bytes([data[0], data[1]]))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ElfError> {
+    let data = bytes.get(offset..offset + 4).ok_or(ElfError::InvalidHeader)?;
+    Ok(u32::from_le_bytes([data[0], data[1], data[2], data[3]]))
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, ElfError> {
+    let data = bytes.get(offset..offset + 8).ok_or(ElfError::InvalidHeader)?;
+    Ok(u64::from_le_bytes([
+        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+    ]))
+}

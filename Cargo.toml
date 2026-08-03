@@ -4,6 +4,7 @@ members = [
     "kernel-core",
     "multiboot2-adapter",
     "limine-adapter",
+    "user-program",
 ]
 resolver = "3"
 

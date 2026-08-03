@@ -79,9 +79,9 @@ impl PhysicalFrameAllocator for BitmapFrameAllocator {
                 mark_range(region.base, region.length, false);
             }
         }
-        mark_range(0, 1024 * 1024, true);
+        mark_reserved_range(0, 1024 * 1024);
         for range in reserved_ranges {
-            mark_range(range.base, range.length, true);
+            mark_reserved_range(range.base, range.length);
         }
         let mut free_frames = 0;
         for frame in 0..MAX_PHYSICAL_FRAMES {
@@ -134,6 +134,17 @@ fn mark_range(base: u64, length: u64, is_reserved: bool) {
     let end = base.saturating_add(length).min(MAX_PHYSICAL_ADDRESS) / PAGE_SIZE;
     for frame in start.min(MAX_PHYSICAL_FRAMES as u64)..end {
         set(&raw mut FRAME_BITMAP, frame as usize, is_reserved);
+    }
+}
+fn mark_reserved_range(base: u64, length: u64) {
+    let start = base / PAGE_SIZE;
+    let end = base
+        .saturating_add(length)
+        .saturating_add(PAGE_SIZE - 1)
+        .min(MAX_PHYSICAL_ADDRESS)
+        / PAGE_SIZE;
+    for frame in start.min(MAX_PHYSICAL_FRAMES as u64)..end {
+        set(&raw mut FRAME_BITMAP, frame as usize, true);
     }
 }
 fn reserved(frame: usize) -> bool {

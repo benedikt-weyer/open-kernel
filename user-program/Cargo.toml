@@ -1,0 +1,8 @@
+[package]
+name = "user-program"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "user-program"
+path = "src/main.rs"
