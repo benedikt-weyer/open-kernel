@@ -7,6 +7,14 @@ ISO_ROOT="$BUILD_DIR/limine-iso-root"
 KERNEL="$BUILD_DIR/open-kernel-limine.elf"
 USER_PROGRAM="$BUILD_DIR/init.elf"
 ISO="$BUILD_DIR/open-kernel-limine.iso"
+USER_MANIFEST="$ROOT_DIR/user-program/Cargo.toml"
+USER_BINARY="$ROOT_DIR/target/release/user-program"
+
+if [ "${OPENKERNEL_STD:-0}" = 1 ]; then
+    : "${OPENKERNEL_RUSTC:?Set OPENKERNEL_RUSTC to the stage1 OpenKernel rustc}"
+    USER_MANIFEST="$ROOT_DIR/std-program/Cargo.toml"
+    USER_BINARY="$ROOT_DIR/target/x86_64-unknown-openkernel/release/openkernel-std-smoke"
+fi
 
 for command in cargo limine ld xorriso; do
     if ! command -v "$command" >/dev/null 2>&1; then
@@ -25,13 +33,20 @@ cargo rustc --manifest-path "$ROOT_DIR/limine-adapter/Cargo.toml" --release \
     -C no-redzone=yes -C linker=ld -C link-arg=-melf_x86_64 \
     -C link-arg=-T"$ROOT_DIR/linker-limine.ld" -C link-arg=-nostdlib \
     -C link-arg=-z -C link-arg=max-page-size=0x1000
-cargo rustc --manifest-path "$ROOT_DIR/user-program/Cargo.toml" --release \
-    --bin user-program -- \
-    -C relocation-model=static -C code-model=large -C linker=ld -C link-arg=-melf_x86_64 \
-    -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib \
-    -C link-arg=-z -C link-arg=max-page-size=0x1000
+if [ "${OPENKERNEL_STD:-0}" = 1 ]; then
+    RUSTC="$OPENKERNEL_RUSTC" cargo rustc --manifest-path "$USER_MANIFEST" --release \
+        --target x86_64-unknown-openkernel -- \
+        -C relocation-model=static -C code-model=large -C linker=ld -C link-arg=-melf_x86_64 \
+        -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib \
+        -C link-arg=-z -C link-arg=max-page-size=0x1000
+else
+    cargo rustc --manifest-path "$USER_MANIFEST" --release -- \
+        -C relocation-model=static -C code-model=large -C linker=ld -C link-arg=-melf_x86_64 \
+        -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib \
+        -C link-arg=-z -C link-arg=max-page-size=0x1000
+fi
 cp "$ROOT_DIR/target/release/limine-adapter" "$KERNEL"
-cp "$ROOT_DIR/target/release/user-program" "$USER_PROGRAM"
+cp "$USER_BINARY" "$USER_PROGRAM"
 
 cp "$KERNEL" "$ISO_ROOT/boot/open-kernel-limine.elf"
 cp "$USER_PROGRAM" "$ISO_ROOT/boot/init.elf"

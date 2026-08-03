@@ -1,0 +1,8 @@
+[package]
+name = "openkernel-std-smoke"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "openkernel-std-smoke"
+path = "src/main.rs"
