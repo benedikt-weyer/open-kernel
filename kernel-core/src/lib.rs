@@ -9,6 +9,7 @@ mod memory;
 mod mouse;
 mod paging;
 mod scheduler;
+mod sata;
 mod serial;
 mod storage;
 mod user;
@@ -33,9 +34,11 @@ pub use mouse::{initialize as initialize_mouse, poll as poll_mouse, position as 
 pub use paging::{
     DEVICE_WINDOW_BASE, FUTURE_USER_SPACE_BASE, KERNEL_STACK_GUARD_PAGE, PageFlags, PagingConfig,
     PagingError, initialize_virtual_memory, map_user_code_page, map_user_page,
-    map_user_page_with_flags, write_physical_frame, zero_physical_frame,
+    map_device_page, map_user_page_with_flags, physical_to_virtual, write_physical_frame,
+    zero_physical_frame,
 };
 pub use scheduler::{TaskEntry, spawn as spawn_task, start as start_scheduler, yield_now};
+pub use sata::{SataError, identify as sata_identify, initialize as initialize_sata, is_available as sata_available, read_first_sector as sata_read_first_sector};
 pub use storage::{
     File, FileSystem, InitRamFs, RamFs, RamFsError, create as create_ram_file,
     delete as delete_ram_file, file_count, open as open_file, ram_file_count,

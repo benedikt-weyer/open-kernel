@@ -131,6 +131,17 @@ pub fn zero_physical_frame(physical_address: u64) {
     }
 }
 
+pub fn physical_to_virtual(physical_address: u64) -> *mut u8 {
+    (physical_address + unsafe { PHYSICAL_MEMORY_OFFSET }) as *mut u8
+}
+
+pub fn map_device_page(virtual_address: u64, physical_address: u64) -> Result<(), PagingError> {
+    if virtual_address % PAGE_SIZE != 0 || physical_address % PAGE_SIZE != 0 {
+        return Err(PagingError::InvalidUserAddress);
+    }
+    map_page(virtual_address, physical_address, PageFlags::Device)
+}
+
 fn map_page(
     virtual_address: u64,
     physical_address: u64,

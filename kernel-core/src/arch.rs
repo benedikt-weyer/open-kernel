@@ -325,6 +325,9 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64) -> u64 {
             0
         }
         9 => crate::shutdown(),
+        10 => syscall_sata_status(),
+        11 => syscall_sata_identify(),
+        12 => syscall_sata_read(),
         _ => u64::MAX,
     }
 }
@@ -363,6 +366,77 @@ fn syscall_write(pointer: u64, length: u64) -> u64 {
     Com1.write(bytes);
     crate::console::user_console_write(bytes);
     length
+}
+
+fn syscall_sata_status() -> u64 {
+    if crate::sata_available() {
+        console_output(b"SATA: AHCI DEVICE READY\r\n");
+        0
+    } else {
+        console_output(b"SATA: NO AHCI DEVICE\r\n");
+        u64::MAX
+    }
+}
+
+fn syscall_sata_identify() -> u64 {
+    match crate::sata_identify() {
+        Ok(model) => {
+            console_output(b"SATA MODEL: ");
+            console_output(&model);
+            console_output(b"\r\n");
+            0
+        }
+        Err(_) => {
+            console_output(b"SATA IDENTIFY FAILED\r\n");
+            u64::MAX
+        }
+    }
+}
+
+fn syscall_sata_read() -> u64 {
+    match crate::sata_read_first_sector() {
+        Ok(bytes) => {
+            let mut output = [0_u8; 64];
+            let mut length = copy_bytes(&mut output, b"LBA 0: ");
+            for byte in bytes {
+                output[length] = hex_digit(byte >> 4);
+                output[length + 1] = hex_digit(byte & 0xF);
+                length += 2;
+                if length < output.len() - 2 {
+                    output[length] = b' ';
+                    length += 1;
+                }
+            }
+            output[length] = b'\r';
+            output[length + 1] = b'\n';
+            console_output(&output[..length + 2]);
+            0
+        }
+        Err(_) => {
+            console_output(b"SATA READ FAILED\r\n");
+            u64::MAX
+        }
+    }
+}
+
+fn console_output(bytes: &[u8]) {
+    Com1.write(bytes);
+    crate::console::user_console_write(bytes);
+}
+
+fn copy_bytes(target: &mut [u8], source: &[u8]) -> usize {
+    let length = target.len().min(source.len());
+    for index in 0..length {
+        target[index] = source[index];
+    }
+    length
+}
+
+fn hex_digit(value: u8) -> u8 {
+    match value {
+        0..=9 => b'0' + value,
+        _ => b'A' + value - 10,
+    }
 }
 
 pub fn timer_ticks() -> u64 {

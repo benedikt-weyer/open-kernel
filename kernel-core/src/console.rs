@@ -77,6 +77,7 @@ impl BootInfo {
 
 pub fn boot(info: BootInfo) -> ! {
     X86_64::initialize();
+    let _ = crate::initialize_sata();
     crate::initialize_mouse();
     let mut keyboard = Ps2KeyboardDriver::new();
     let _ = keyboard.initialize();
