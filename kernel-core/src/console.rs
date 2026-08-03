@@ -1,7 +1,9 @@
-use core::{arch::asm, ptr::write_volatile};
+use core::ptr::write_volatile;
 
 use crate::{
-    arch::{Architecture, X86_64, take_keyboard_scancode},
+    arch::{Architecture, X86_64},
+    drivers::Driver,
+    keyboard::Ps2KeyboardDriver,
     memory::{BitmapFrameAllocator, PhysicalFrameAllocator},
     serial::{Com1, SerialOutput},
 };
@@ -66,6 +68,8 @@ impl BootInfo {
 pub fn boot(info: BootInfo) -> ! {
     X86_64::initialize();
     crate::initialize_mouse();
+    let mut keyboard = Ps2KeyboardDriver::new();
+    let _ = keyboard.initialize();
 
     Com1.write(b"open-kernel: ");
     Com1.write(info.bootloader.as_bytes());
@@ -86,7 +90,12 @@ pub fn boot(info: BootInfo) -> ! {
             Com1.write(b"x");
             Com1.write_usize(framebuffer.height);
             Com1.write(b"\r\n");
-            run_framebuffer_console(framebuffer, info.bootloader.as_bytes(), info.status)
+            run_framebuffer_console(
+                framebuffer,
+                info.bootloader.as_bytes(),
+                info.status,
+                &keyboard,
+            )
         }
     }
 
@@ -119,7 +128,12 @@ fn write_vga_text(text: &[u8], row: usize) {
     }
 }
 
-fn run_framebuffer_console(framebuffer: Framebuffer, bootloader: &[u8], status: BootStatus) -> ! {
+fn run_framebuffer_console(
+    framebuffer: Framebuffer,
+    bootloader: &[u8],
+    status: BootStatus,
+    keyboard: &Ps2KeyboardDriver,
+) -> ! {
     let mut input = [0_u8; 64];
     let mut input_length = 0;
     let mut response = [0_u8; 80];
@@ -140,7 +154,7 @@ fn run_framebuffer_console(framebuffer: Framebuffer, bootloader: &[u8], status: 
         }
         crate::scheduler::yield_if_preempted();
 
-        match read_key() {
+        match read_key(&keyboard) {
             Some(b'\n') => {
                 response_length = run_console_command(
                     &input[..input_length],
@@ -289,24 +303,12 @@ fn append_usize(target: &mut [u8], start: usize, mut value: usize) -> usize {
     output
 }
 
-fn read_key() -> Option<u8> {
-    let scancode = match take_keyboard_scancode() {
-        Some(scancode) => scancode,
-        None => {
-            let status: u8;
-            unsafe {
-                asm!("in al, dx", in("dx") 0x64_u16, out("al") status, options(nomem, nostack));
-            }
-            if status & 1 == 0 {
-                return None;
-            }
-            let scancode: u8;
-            unsafe {
-                asm!("in al, dx", in("dx") 0x60_u16, out("al") scancode, options(nomem, nostack));
-            }
-            scancode
-        }
-    };
+fn read_key(keyboard: &Ps2KeyboardDriver) -> Option<u8> {
+    let scancode = keyboard.read_scancode()?;
+    decode_scancode(scancode)
+}
+
+fn decode_scancode(scancode: u8) -> Option<u8> {
     if scancode & 0x80 != 0 {
         return None;
     }

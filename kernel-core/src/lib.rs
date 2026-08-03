@@ -3,6 +3,7 @@
 mod arch;
 mod console;
 mod drivers;
+mod keyboard;
 mod memory;
 mod mouse;
 mod paging;
@@ -18,6 +19,7 @@ use serial::{Com1, SerialOutput};
 pub use arch::timer_ticks;
 pub use console::{BootInfo, BootStatus, Display, Framebuffer, boot};
 pub use drivers::{Driver, DriverError, LoopbackNetworkDriver, NetworkDriver};
+pub use keyboard::Ps2KeyboardDriver;
 pub use memory::{
     MemoryRegion, MemoryRegionKind, PAGE_SIZE, PhysicalFrameAllocator, PhysicalMemoryRange,
     PhysicalMemoryStats, allocate_physical_frame, free_physical_frame, initialize_physical_memory,
