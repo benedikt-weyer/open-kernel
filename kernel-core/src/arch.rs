@@ -14,6 +14,7 @@ const IA32_FMASK: u32 = 0xC000_0084;
 const SYSCALL_STACK_SIZE: usize = 16 * 1024;
 const PIT_HZ: u64 = 100;
 const MAX_SLEEPERS: usize = 8;
+const MAX_FUTEX_WAITERS: usize = 8;
 
 static mut GDT: [u64; 7] = [
     0,
@@ -111,6 +112,13 @@ struct Sleeper {
     deadline: u64,
 }
 static mut SLEEPERS: [Option<Sleeper>; MAX_SLEEPERS] = [None; MAX_SLEEPERS];
+#[derive(Clone, Copy)]
+struct FutexWaiter {
+    address: u64,
+    thread: usize,
+    deadline: Option<u64>,
+}
+static mut FUTEX_WAITERS: [Option<FutexWaiter>; MAX_FUTEX_WAITERS] = [None; MAX_FUTEX_WAITERS];
 static mut KEYBOARD_SCANCODE: u8 = 0;
 
 pub trait Architecture {
@@ -406,6 +414,8 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         25 => syscall_getcwd(pointer, length),
         26 => syscall_executable_info(pointer, length),
         27 => monotonic_milliseconds(),
+        28 => syscall_futex_wait(pointer, length as u32, argument),
+        29 => syscall_futex_wake(pointer, length),
         _ => u64::MAX,
     }
 }
@@ -483,6 +493,54 @@ fn syscall_executable_info(buffer: u64, length: u64) -> u64 {
     crate::user::executable_info(output)
 }
 
+fn syscall_futex_wait(address: u64, expected: u32, timeout_milliseconds: u64) -> u64 {
+    if !valid_user_word(address) {
+        return u64::MAX;
+    }
+    if unsafe { core::ptr::read_volatile(address as *const u32) } != expected {
+        return 1; // EAGAIN: the value changed before this thread blocked.
+    }
+    let Some(thread) = crate::scheduler::current_id() else {
+        return u64::MAX;
+    };
+    let deadline = if timeout_milliseconds == u64::MAX {
+        None
+    } else {
+        Some(timer_ticks().wrapping_add((timeout_milliseconds.saturating_add(9) / 10).max(1)))
+    };
+    unsafe {
+        for waiter in (&mut *(&raw mut FUTEX_WAITERS)).iter_mut() {
+            if waiter.is_none() {
+                *waiter = Some(FutexWaiter { address, thread, deadline });
+                crate::scheduler::block_current();
+                return 0;
+            }
+        }
+    }
+    u64::MAX
+}
+
+fn syscall_futex_wake(address: u64, count: u64) -> u64 {
+    if !valid_user_word(address) {
+        return u64::MAX;
+    }
+    let mut woken = 0;
+    unsafe {
+        for waiter in (&mut *(&raw mut FUTEX_WAITERS)).iter_mut() {
+            let Some(entry) = *waiter else {
+                continue;
+            };
+            if entry.address == address && woken < count {
+                *waiter = None;
+                if crate::scheduler::wake(entry.thread) {
+                    woken += 1;
+                }
+            }
+        }
+    }
+    woken
+}
+
 fn syscall_write(pointer: u64, length: u64) -> u64 {
     let Some(bytes) = user_bytes(pointer, length, 256) else {
         return u64::MAX;
@@ -504,6 +562,13 @@ fn user_bytes(pointer: u64, length: u64, maximum: u64) -> Option<&'static [u8]> 
 fn user_bytes_mut(pointer: u64, length: u64, maximum: u64) -> Option<&'static mut [u8]> {
     let bytes = user_bytes(pointer, length, maximum)?;
     Some(unsafe { core::slice::from_raw_parts_mut(bytes.as_ptr() as *mut u8, bytes.len()) })
+}
+
+fn valid_user_word(address: u64) -> bool {
+    const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
+    address % core::mem::align_of::<u32>() as u64 == 0
+        && address >= crate::FUTURE_USER_SPACE_BASE
+        && address.checked_add(core::mem::size_of::<u32>() as u64).is_some_and(|end| end <= USER_SPACE_END)
 }
 
 fn syscall_sata_status() -> u64 {
@@ -657,6 +722,20 @@ fn wake_expired_sleepers(ticks: u64) {
     }
 }
 
+fn wake_expired_futexes(ticks: u64) {
+    unsafe {
+        for waiter in (&mut *(&raw mut FUTEX_WAITERS)).iter_mut() {
+            let Some(entry) = *waiter else {
+                continue;
+            };
+            if entry.deadline.is_some_and(|deadline| ticks.wrapping_sub(deadline) < (1_u64 << 63)) {
+                *waiter = None;
+                crate::scheduler::wake(entry.thread);
+            }
+        }
+    }
+}
+
 pub fn take_keyboard_scancode() -> Option<u8> {
     let scancode = unsafe { core::ptr::read_volatile(&raw const KEYBOARD_SCANCODE) };
     if scancode == 0 {
@@ -682,6 +761,7 @@ extern "C" fn irq_dispatch(vector: u64) {
                 let next_ticks = ticks.wrapping_add(1);
                 core::ptr::write_volatile(&raw mut TIMER_TICKS, next_ticks);
                 wake_expired_sleepers(next_ticks);
+                wake_expired_futexes(next_ticks);
             }
             33 => {
                 core::ptr::write_volatile(&raw mut KEYBOARD_SCANCODE, inb(0x60));

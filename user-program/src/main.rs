@@ -3,27 +3,30 @@
 // The writable .data/.bss ELF segment holds allocator state.
 
 extern crate alloc;
+mod sync;
 
 use alloc::vec::Vec;
 use core::{
     alloc::{GlobalAlloc, Layout},
     arch::asm,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
+use sync::{UserCondvar, UserMutex, UserThread};
 use core::panic::PanicInfo;
 
 static BANNER: [u8; 37] = *b"OPEN KERNEL USER CONSOLE\r\nTYPE HELP\r\n";
 static PROMPT: [u8; 2] = *b"> ";
-static HELP: &[u8] = b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS HEAP VFS ENV TIME\r\n";
+static HELP: &[u8] = b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS HEAP VFS ENV TIME SYNC\r\n";
 static UNKNOWN: [u8; 17] = *b"UNKNOWN COMMAND\r\n";
 static EXITING: [u8; 9] = *b"GOODBYE\r\n";
-const COMMANDS: [&[u8]; 14] = [
+const COMMANDS: [&[u8]; 15] = [
     b"help", b"clear", b"exit", b"shutdown", b"sata", b"identify", b"read", b"pci", b"lsblk",
     b"threads",
     b"heap",
     b"vfs",
     b"env",
     b"time",
+    b"sync",
 ];
 
 struct BrkAllocator {
@@ -89,6 +92,9 @@ unsafe impl GlobalAlloc for BrkAllocator {
 
 #[global_allocator]
 static ALLOCATOR: BrkAllocator = BrkAllocator::new();
+static SYNC_MUTEX: UserMutex = UserMutex::new();
+static SYNC_CONDITION: UserCondvar = UserCondvar::new();
+static SYNC_VALUE: AtomicU32 = AtomicU32::new(0);
 
 #[unsafe(no_mangle)]
 extern "C" fn _start() -> ! {
@@ -137,6 +143,8 @@ extern "C" fn _start() -> ! {
                 environment_test();
             } else if equals(input, length, b"time") {
                 time_test();
+            } else if equals(input, length, b"sync") {
+                synchronization_test();
             } else if length != 0 {
                 write(&UNKNOWN);
             }
@@ -171,6 +179,35 @@ extern "C" fn _start() -> ! {
             length += 1;
             write(core::slice::from_ref(&character));
         }
+    }
+}
+
+fn synchronization_test() {
+    SYNC_VALUE.store(0, Ordering::Release);
+    let Some(worker) = UserThread::spawn(synchronization_worker, 0) else {
+        write(b"SYNC THREAD FAILED\r\n");
+        return;
+    };
+    SYNC_MUTEX.lock();
+    while SYNC_VALUE.load(Ordering::Acquire) == 0 {
+        SYNC_CONDITION.wait(&SYNC_MUTEX);
+    }
+    SYNC_MUTEX.unlock();
+    if worker.join() == 0 {
+        write(b"SYNC OK\r\n");
+    } else {
+        write(b"SYNC JOIN FAILED\r\n");
+    }
+}
+
+extern "C" fn synchronization_worker(_: u64) {
+    SYNC_MUTEX.lock();
+    SYNC_VALUE.store(1, Ordering::Release);
+    SYNC_CONDITION.notify_one();
+    SYNC_MUTEX.unlock();
+    syscall1(16, 0);
+    loop {
+        core::hint::spin_loop();
     }
 }
 
