@@ -129,7 +129,11 @@ pub(crate) fn spawn(path: &[u8]) -> u64 {
     let Ok(loaded) = crate::load_user_elf_into(image, address_space, process) else {
         return u64::MAX;
     };
-    let Some(thread) = crate::spawn_user_for_process(process, loaded.entry, 0, 0, Some(loaded.stack_pointer)) else {
+    let previous_address_space = crate::active_address_space();
+    unsafe { crate::switch_address_space(address_space) };
+    let stack_pointer = initialize_process_stack(loaded.stack_pointer);
+    unsafe { crate::switch_address_space(previous_address_space) };
+    let Some(thread) = crate::spawn_user_for_process(process, loaded.entry, 0, 0, Some(stack_pointer)) else {
         return u64::MAX;
     };
     crate::set_process_main_thread(process, thread);
