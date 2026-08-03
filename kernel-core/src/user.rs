@@ -68,7 +68,7 @@ pub fn run_demo() -> Result<(), ElfError> {
         CURRENT_DIRECTORY_LENGTH = 1;
         EXECUTABLE_ENTRY = loaded.entry;
     }
-    loaded.stack_pointer = initialize_process_stack(loaded.stack_pointer);
+    loaded.stack_pointer = initialize_process_stack(loaded.stack_pointer, b"init", &[]);
     crate::scheduler::initialize_user_process();
     crate::scheduler::spawn_user(loaded.entry, 0, 0, Some(loaded.stack_pointer))
         .ok_or(PagingError::FrameAllocationFailed)?;
@@ -113,7 +113,7 @@ pub(crate) fn open(path: &[u8], flags: u64) -> u64 {
     u64::MAX
 }
 
-pub(crate) fn spawn(path: &[u8]) -> u64 {
+pub(crate) fn spawn(path: &[u8], argv: &[&[u8]]) -> u64 {
     let Some(path) = resolve_path(path) else {
         return u64::MAX;
     };
@@ -131,7 +131,7 @@ pub(crate) fn spawn(path: &[u8]) -> u64 {
     };
     let previous_address_space = crate::active_address_space();
     unsafe { crate::switch_address_space(address_space) };
-    let stack_pointer = initialize_process_stack(loaded.stack_pointer);
+    let stack_pointer = initialize_process_stack(loaded.stack_pointer, path.as_bytes(), argv);
     unsafe { crate::switch_address_space(previous_address_space) };
     let Some(thread) = crate::spawn_user_for_process(process, loaded.entry, 0, 0, Some(stack_pointer)) else {
         return u64::MAX;
@@ -375,14 +375,19 @@ fn resolve_path(path: &[u8]) -> Option<&'static str> {
     }
 }
 
-fn initialize_process_stack(stack_pointer: u64) -> u64 {
-    let program_name = b"init\0";
+fn initialize_process_stack(stack_pointer: u64, program_name: &[u8], argv: &[&[u8]]) -> u64 {
     let path = b"PATH=/bin\0";
     let pwd = b"PWD=/\0";
     let mut cursor = stack_pointer + 8;
-    cursor -= program_name.len() as u64;
-    let program_name_pointer = cursor;
-    write_user_bytes(cursor, program_name);
+    let mut arguments = [0_u64; 4];
+    let argument_count = if argv.is_empty() { 1 } else { argv.len().min(arguments.len()) };
+    for index in (0..argument_count).rev() {
+        let value = if argv.is_empty() { program_name } else { argv[index] };
+        cursor -= value.len() as u64 + 1;
+        write_user_bytes(cursor, value);
+        write_user_bytes(cursor + value.len() as u64, b"\0");
+        arguments[index] = cursor;
+    }
     cursor -= path.len() as u64;
     let path_pointer = cursor;
     write_user_bytes(cursor, path);
@@ -391,12 +396,16 @@ fn initialize_process_stack(stack_pointer: u64) -> u64 {
     write_user_bytes(cursor, pwd);
     cursor &= !0xF;
 
-    // A padding word preserves the 8-byte System V function-entry alignment
-    // used by the hand-written Rust `_start` in this image.
-    for value in [0, 0, 0, 0, pwd_pointer, path_pointer, 0, program_name_pointer, 1] {
+    for value in [0, pwd_pointer, path_pointer, 0] {
         cursor -= 8;
         unsafe { core::ptr::write_volatile(cursor as *mut u64, value) };
     }
+    for index in (0..argument_count).rev() {
+        cursor -= 8;
+        unsafe { core::ptr::write_volatile(cursor as *mut u64, arguments[index]) };
+    }
+    cursor -= 8;
+    unsafe { core::ptr::write_volatile(cursor as *mut u64, argument_count as u64) };
     cursor
 }
 

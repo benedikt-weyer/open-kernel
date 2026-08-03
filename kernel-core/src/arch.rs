@@ -422,7 +422,7 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         30 => syscall_set_tls_base(pointer),
         31 => syscall_getrandom(pointer, length),
         32 => syscall_vfs_stat(pointer, length, argument),
-        33 => syscall_process_spawn(pointer, length),
+        33 => syscall_process_spawn(pointer, length, argument),
         34 => crate::wait_process(pointer as usize).unwrap_or(u64::MAX),
         _ => u64::MAX,
     }
@@ -574,11 +574,28 @@ fn syscall_vfs_stat(fd: u64, buffer: u64, length: u64) -> u64 {
     crate::user::stat(fd, output)
 }
 
-fn syscall_process_spawn(path: u64, length: u64) -> u64 {
+fn syscall_process_spawn(path: u64, length: u64, argv: u64) -> u64 {
     let Some(bytes) = user_bytes(path, length, 64) else {
         return u64::MAX;
     };
-    crate::user::spawn(bytes)
+    let mut arguments = [b"" as &[u8]; 4];
+    let mut count = 0;
+    if argv != 0 {
+        for index in 0..arguments.len() {
+            let Some(pointer_bytes) = user_bytes(argv + (index * 8) as u64, 8, 8) else {
+                return u64::MAX;
+            };
+            let mut raw = [0_u8; 8];
+            for byte in 0..8 { raw[byte] = pointer_bytes[byte]; }
+            let pointer = u64::from_le_bytes(raw);
+            if pointer == 0 { break; }
+            let Some(value) = user_bytes(pointer, 64, 64) else { return u64::MAX; };
+            let Some(length) = value.iter().position(|byte| *byte == 0) else { return u64::MAX; };
+            arguments[count] = &value[..length];
+            count += 1;
+        }
+    }
+    crate::user::spawn(bytes, &arguments[..count])
 }
 
 fn syscall_write(pointer: u64, length: u64) -> u64 {
