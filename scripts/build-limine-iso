@@ -46,7 +46,7 @@ cargo rustc --manifest-path "$ROOT_DIR/limine-adapter/Cargo.toml" --release \
     -C link-arg=-z -C link-arg=max-page-size=0x1000
 cargo clean --manifest-path "$ROOT_DIR/user-program/Cargo.toml" -p user-program
 cargo rustc --manifest-path "$USER_MANIFEST" --release -- \
-        -C relocation-model=static -C code-model=large -C linker=ld -C link-arg=-melf_x86_64 \
+        -C relocation-model=static -C code-model=small -C linker=ld -C link-arg=-melf_x86_64 \
         -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib \
         -C link-arg=-z -C link-arg=max-page-size=0x1000
 if [ "$OPENKERNEL_STD" = 1 ]; then

@@ -646,7 +646,14 @@ unsafe fn schedule_from_current(current: ThreadId) {
         return;
     }
     CURRENT_THREAD = next;
-    (*(&raw mut THREADS))[next].state = ThreadState::Running;
+    let thread = &mut (*(&raw mut THREADS))[next];
+    thread.state = ThreadState::Running;
+    if thread.is_user
+        && let Some(process) = thread.process
+        && let Some(address_space) = process_address_space(process)
+    {
+        crate::switch_address_space(address_space);
+    }
     scheduler_context_switch(
         &raw mut (*(&raw mut THREADS))[current].context,
         &raw const (*(&raw const THREADS))[next].context,
