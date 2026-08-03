@@ -6,6 +6,7 @@ mod memory;
 mod paging;
 mod scheduler;
 mod serial;
+mod storage;
 
 use arch::{Architecture, X86_64};
 use core::panic::PanicInfo;
@@ -23,6 +24,7 @@ pub use paging::{
     PagingError, initialize_virtual_memory, map_user_page,
 };
 pub use scheduler::{TaskEntry, spawn as spawn_task, start as start_scheduler, yield_now};
+pub use storage::{File, FileSystem, InitRamFs, file_count, open as open_file, register_boot_file};
 
 pub fn halt() -> ! {
     X86_64::halt()
