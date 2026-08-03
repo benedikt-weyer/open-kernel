@@ -14,13 +14,14 @@ use core::panic::PanicInfo;
 
 static BANNER: [u8; 37] = *b"OPEN KERNEL USER CONSOLE\r\nTYPE HELP\r\n";
 static PROMPT: [u8; 2] = *b"> ";
-static HELP: &[u8] = b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS HEAP\r\n";
+static HELP: &[u8] = b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS HEAP VFS\r\n";
 static UNKNOWN: [u8; 17] = *b"UNKNOWN COMMAND\r\n";
 static EXITING: [u8; 9] = *b"GOODBYE\r\n";
-const COMMANDS: [&[u8]; 11] = [
+const COMMANDS: [&[u8]; 12] = [
     b"help", b"clear", b"exit", b"shutdown", b"sata", b"identify", b"read", b"pci", b"lsblk",
     b"threads",
     b"heap",
+    b"vfs",
 ];
 
 struct BrkAllocator {
@@ -128,6 +129,8 @@ extern "C" fn _start() -> ! {
                 user_thread_demo();
             } else if equals(input, length, b"heap") {
                 heap_test();
+            } else if equals(input, length, b"vfs") {
+                vfs_test();
             } else if length != 0 {
                 write(&UNKNOWN);
             }
@@ -163,6 +166,38 @@ extern "C" fn _start() -> ! {
             write(core::slice::from_ref(&character));
         }
     }
+}
+
+fn vfs_test() {
+    const OPEN_WRITE: u64 = 1;
+    const OPEN_CREATE: u64 = 2;
+    const OPEN_DIRECTORY: u64 = 4;
+    let fd = syscall3(19, b"/tmp/demo".as_ptr() as u64, b"/tmp/demo".len() as u64, OPEN_WRITE | OPEN_CREATE);
+    if fd == u64::MAX || syscall3(21, fd, b"hello".as_ptr() as u64, 5) != 5 {
+        write(b"VFS WRITE FAILED\r\n");
+        return;
+    }
+    if syscall3(23, fd, 0, 0) != 0 {
+        write(b"VFS SEEK FAILED\r\n");
+        return;
+    }
+    let mut content = [0_u8; 8];
+    if syscall3(20, fd, content.as_mut_ptr() as u64, 5) != 5 || &content[..5] != b"hello" {
+        write(b"VFS READ FAILED\r\n");
+        return;
+    }
+    if syscall1(22, fd) != 0 {
+        write(b"VFS CLOSE FAILED\r\n");
+        return;
+    }
+    let directory = syscall3(19, b"/tmp".as_ptr() as u64, b"/tmp".len() as u64, OPEN_DIRECTORY);
+    let mut entry = [0_u8; 64];
+    if directory == u64::MAX || syscall3(20, directory, entry.as_mut_ptr() as u64, entry.len() as u64) == 0 {
+        write(b"VFS DIRECTORY FAILED\r\n");
+        return;
+    }
+    let _ = syscall1(22, directory);
+    write(b"VFS OK\r\n");
 }
 
 fn heap_test() {
@@ -281,6 +316,21 @@ fn syscall2(number: u64, first: u64, second: u64) -> u64 {
             inlateout("rax") number => result,
             in("rdi") first,
             in("rsi") second,
+            clobber_abi("sysv64"),
+        );
+    }
+    result
+}
+
+fn syscall3(number: u64, first: u64, second: u64, third: u64) -> u64 {
+    let result: u64;
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") number => result,
+            in("rdi") first,
+            in("rsi") second,
+            in("rdx") third,
             clobber_abi("sysv64"),
         );
     }

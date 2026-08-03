@@ -61,8 +61,9 @@ pub use storage::{
 };
 pub use xhci::XhciController;
 pub use vfs::{
-    VfsError, mount_count as vfs_mount_count, mount_initramfs, mounted as vfs_mounted,
-    open as vfs_open,
+    VfsError, directory_entry as vfs_directory_entry, mount_count as vfs_mount_count,
+    mount_initramfs, mounted as vfs_mounted, open as vfs_open, open_file as vfs_open_file,
+    write as vfs_write, write_at as vfs_write_at,
 };
 
 pub fn halt() -> ! {

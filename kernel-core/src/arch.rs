@@ -60,6 +60,8 @@ static mut USER_SYSCALL_POINTER: u64 = 0;
 #[unsafe(no_mangle)]
 static mut USER_SYSCALL_LENGTH: u64 = 0;
 #[unsafe(no_mangle)]
+static mut USER_SYSCALL_ARGUMENT: u64 = 0;
+#[unsafe(no_mangle)]
 static mut USER_SYSCALL_CONTEXT: crate::scheduler::UserContext =
     crate::scheduler::UserContext::EMPTY;
 
@@ -184,6 +186,7 @@ x86_syscall_stub:
     mov %rax, USER_SYSCALL_NUMBER(%rip)
     mov %rdi, USER_SYSCALL_POINTER(%rip)
     mov %rsi, USER_SYSCALL_LENGTH(%rip)
+    mov %rdx, USER_SYSCALL_ARGUMENT(%rip)
     call scheduler_syscall_stack_top
     mov %rax, %rsp
     and $-16, %rsp
@@ -191,6 +194,7 @@ x86_syscall_stub:
     mov USER_SYSCALL_LENGTH(%rip), %rdx
     mov USER_SYSCALL_POINTER(%rip), %rsi
     mov USER_SYSCALL_NUMBER(%rip), %rdi
+    mov USER_SYSCALL_ARGUMENT(%rip), %rcx
     call syscall_dispatch
     pushq %rax
     call scheduler_current_syscall_state
@@ -353,7 +357,7 @@ extern "C" fn scheduler_set_tss_stack() {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64) -> u64 {
+extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument: u64) -> u64 {
     match number {
         1 => syscall_write(pointer, length),
         2 => {
@@ -385,6 +389,11 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64) -> u64 {
         16 => crate::scheduler::exit_current_with_status(pointer),
         17 => crate::scheduler::join(pointer as usize).unwrap_or(u64::MAX),
         18 => crate::user::brk(pointer),
+        19 => syscall_vfs_open(pointer, length, argument),
+        20 => syscall_vfs_read(pointer, length, argument),
+        21 => syscall_vfs_write(pointer, length, argument),
+        22 => crate::user::close(pointer),
+        23 => crate::user::seek(pointer, length as i64, argument),
         _ => u64::MAX,
     }
 }
@@ -409,18 +418,48 @@ fn syscall_sleep(ticks: u64) -> u64 {
     0
 }
 
-fn syscall_write(pointer: u64, length: u64) -> u64 {
-    const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
-    let Some(end) = pointer.checked_add(length) else {
+fn syscall_vfs_open(path: u64, length: u64, flags: u64) -> u64 {
+    let Some(bytes) = user_bytes(path, length, 64) else {
         return u64::MAX;
     };
-    if pointer < crate::FUTURE_USER_SPACE_BASE || end > USER_SPACE_END || length > 256 {
+    crate::user::open(bytes, flags)
+}
+
+fn syscall_vfs_read(fd: u64, buffer: u64, length: u64) -> u64 {
+    let Some(output) = user_bytes_mut(buffer, length, 4096) else {
         return u64::MAX;
-    }
-    let bytes = unsafe { core::slice::from_raw_parts(pointer as *const u8, length as usize) };
+    };
+    crate::user::read(fd, output)
+}
+
+fn syscall_vfs_write(fd: u64, buffer: u64, length: u64) -> u64 {
+    let Some(input) = user_bytes(buffer, length, 4096) else {
+        return u64::MAX;
+    };
+    crate::user::write(fd, input)
+}
+
+fn syscall_write(pointer: u64, length: u64) -> u64 {
+    let Some(bytes) = user_bytes(pointer, length, 256) else {
+        return u64::MAX;
+    };
     Com1.write(bytes);
     crate::console::user_console_write(bytes);
     length
+}
+
+fn user_bytes(pointer: u64, length: u64, maximum: u64) -> Option<&'static [u8]> {
+    const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
+    let end = pointer.checked_add(length)?;
+    if pointer < crate::FUTURE_USER_SPACE_BASE || end > USER_SPACE_END || length > maximum {
+        return None;
+    }
+    Some(unsafe { core::slice::from_raw_parts(pointer as *const u8, length as usize) })
+}
+
+fn user_bytes_mut(pointer: u64, length: u64, maximum: u64) -> Option<&'static mut [u8]> {
+    let bytes = user_bytes(pointer, length, maximum)?;
+    Some(unsafe { core::slice::from_raw_parts_mut(bytes.as_ptr() as *mut u8, bytes.len()) })
 }
 
 fn syscall_sata_status() -> u64 {

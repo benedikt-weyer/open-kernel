@@ -98,6 +98,10 @@ pub fn file_count() -> usize {
     unsafe { FILE_COUNT }
 }
 
+pub fn boot_file_name(index: usize) -> Option<&'static str> {
+    unsafe { (&*(&raw const FILES))[..FILE_COUNT].iter().flatten().nth(index).map(|file| file.name) }
+}
+
 pub fn create(name: &str) -> Result<(), RamFsError> {
     let name = validate_name(name)?;
     unsafe {
@@ -122,8 +126,15 @@ pub fn create(name: &str) -> Result<(), RamFsError> {
 }
 
 pub fn write(name: &str, data: &[u8]) -> Result<(), RamFsError> {
+    write_at(name, 0, data)
+}
+
+pub fn write_at(name: &str, offset: usize, data: &[u8]) -> Result<(), RamFsError> {
     let name = validate_name(name)?;
-    if data.len() > MAX_RAM_FILE_SIZE {
+    let Some(end) = offset.checked_add(data.len()) else {
+        return Err(RamFsError::FileTooLarge);
+    };
+    if end > MAX_RAM_FILE_SIZE {
         return Err(RamFsError::FileTooLarge);
     }
     unsafe {
@@ -132,9 +143,9 @@ pub fn write(name: &str, data: &[u8]) -> Result<(), RamFsError> {
         };
         let file = &mut (*(&raw mut RAM_FILES))[slot];
         for (index, byte) in data.iter().enumerate() {
-            file.data[index] = *byte;
+            file.data[offset + index] = *byte;
         }
-        file.length = data.len();
+        file.length = file.length.max(end);
     }
     Ok(())
 }
@@ -165,6 +176,19 @@ pub fn ram_file_count() -> usize {
             .iter()
             .filter(|file| file.used)
             .count()
+    }
+}
+
+pub fn ram_file_name(index: usize, output: &mut [u8]) -> Option<usize> {
+    unsafe {
+        let file = (*(&raw const RAM_FILES)).iter().filter(|file| file.used).nth(index)?;
+        if output.len() < file.name_length {
+            return None;
+        }
+        for offset in 0..file.name_length {
+            output[offset] = file.name[offset];
+        }
+        Some(file.name_length)
     }
 }
 
