@@ -1,6 +1,7 @@
 use core::arch::{asm, global_asm};
 
 const MAX_THREADS: usize = 8;
+const MAX_PROCESSES: usize = MAX_THREADS;
 const NO_THREAD: usize = usize::MAX;
 const IDLE_THREAD: usize = 0;
 
@@ -52,6 +53,9 @@ impl UserContext {
 pub struct Process {
     pub id: ProcessId,
     pub address_space: u64,
+}
+impl Process {
+    const EMPTY: Self = Self { id: NO_THREAD, address_space: 0 };
 }
 
 #[repr(C)]
@@ -139,10 +143,7 @@ static mut SCHEDULER_CONTEXT: Context = Context::EMPTY;
 static mut CURRENT_THREAD: usize = NO_THREAD;
 static mut PREEMPT_REQUESTED: bool = false;
 static mut IDLE_CREATED: bool = false;
-static mut USER_PROCESS: Process = Process {
-    id: USER_PROCESS_ID,
-    address_space: 0,
-};
+static mut PROCESSES: [Process; MAX_PROCESSES] = [Process::EMPTY; MAX_PROCESSES];
 
 unsafe extern "C" {
     fn scheduler_context_switch(from: *mut Context, to: *const Context);
@@ -235,7 +236,29 @@ pub fn initialize_user_process() {
     unsafe {
         let address_space: u64;
         asm!("mov {}, cr3", out(reg) address_space, options(nomem, nostack));
-        (*(&raw mut USER_PROCESS)).address_space = address_space;
+        (*(&raw mut PROCESSES))[0] = Process { id: USER_PROCESS_ID, address_space };
+    }
+}
+
+pub fn create_process(address_space: u64) -> Option<ProcessId> {
+    unsafe {
+        for slot in 1..MAX_PROCESSES {
+            if (*(&raw const PROCESSES))[slot].id == NO_THREAD {
+                let id = slot + 1;
+                (*(&raw mut PROCESSES))[slot] = Process { id, address_space };
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
+pub fn process_address_space(id: ProcessId) -> Option<u64> {
+    unsafe {
+        (*(&raw const PROCESSES))
+            .iter()
+            .find(|process| process.id == id)
+            .map(|process| process.address_space)
     }
 }
 
@@ -615,6 +638,12 @@ extern "C" fn thread_trampoline() {
 
 extern "C" fn user_thread_trampoline() {
     unsafe {
+        let thread = &(*(&raw const THREADS))[CURRENT_THREAD];
+        if let Some(process) = thread.process
+            && let Some(address_space) = process_address_space(process)
+        {
+            crate::switch_address_space(address_space);
+        }
         crate::arch::resume_user_context(current_user_context());
     }
 }
