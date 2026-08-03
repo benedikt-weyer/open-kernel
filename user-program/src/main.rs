@@ -2,6 +2,9 @@
 #![no_main]
 // The writable .data/.bss ELF segment holds allocator state.
 
+extern crate alloc;
+
+use alloc::vec::Vec;
 use core::{
     alloc::{GlobalAlloc, Layout},
     arch::asm,
@@ -163,21 +166,14 @@ extern "C" fn _start() -> ! {
 }
 
 fn heap_test() {
-    let layout = Layout::from_size_align(8192, 64).unwrap();
-    let allocation = unsafe { ALLOCATOR.alloc(layout) };
-    if allocation.is_null() {
-        write(b"HEAP ALLOCATION FAILED\r\n");
-        return;
+    let mut bytes = Vec::with_capacity(8192);
+    for index in 0..8192 {
+        bytes.push((index as u8) ^ 0xA5);
     }
-    unsafe {
-        allocation.write(0xA5);
-        allocation.add(8191).write(0x5A);
-        if allocation.read() == 0xA5 && allocation.add(8191).read() == 0x5A {
-            write(b"HEAP OK\r\n");
-        } else {
-            write(b"HEAP CORRUPTED\r\n");
-        }
-        ALLOCATOR.dealloc(allocation, layout);
+    if bytes.len() == 8192 && bytes[0] == 0xA5 && bytes[8191] == 0x5A {
+        write(b"ALLOC VEC OK\r\n");
+    } else {
+        write(b"ALLOC VEC CORRUPTED\r\n");
     }
 }
 
@@ -289,6 +285,49 @@ fn syscall2(number: u64, first: u64, second: u64) -> u64 {
         );
     }
     result
+}
+
+// `alloc` was built for the host target, so provide the small freestanding ABI
+// surface it references when the ELF is linked with `-nostdlib`.
+#[unsafe(no_mangle)]
+extern "C" fn rust_eh_personality() {}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn memcpy(destination: *mut u8, source: *const u8, length: usize) -> *mut u8 {
+    for offset in 0..length {
+        unsafe {
+            destination
+                .add(offset)
+                .write_volatile(source.add(offset).read_volatile());
+        }
+    }
+    destination
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn memmove(destination: *mut u8, source: *const u8, length: usize) -> *mut u8 {
+    if (destination as usize) <= (source as usize) {
+        unsafe { memcpy(destination, source, length) }
+    } else {
+        for offset in (0..length).rev() {
+            unsafe {
+                destination
+                    .add(offset)
+                    .write_volatile(source.add(offset).read_volatile());
+            }
+        }
+        destination
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn memset(destination: *mut u8, value: i32, length: usize) -> *mut u8 {
+    for offset in 0..length {
+        unsafe {
+            destination.add(offset).write_volatile(value as u8);
+        }
+    }
+    destination
 }
 
 #[panic_handler]
