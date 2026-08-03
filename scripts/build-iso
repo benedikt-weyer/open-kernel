@@ -7,7 +7,7 @@ ISO_ROOT="$BUILD_DIR/iso-root"
 KERNEL="$BUILD_DIR/open-kernel.elf"
 ISO="$BUILD_DIR/open-kernel.iso"
 
-for command in gcc ld grub-file grub-mkrescue rustc xorriso; do
+for command in cargo ld grub-file grub-mkrescue rustc xorriso; do
     if ! command -v "$command" >/dev/null 2>&1; then
         printf 'Missing required command: %s\n' "$command" >&2
         exit 1
@@ -17,12 +17,14 @@ done
 rm -rf "$ISO_ROOT"
 mkdir -p "$BUILD_DIR" "$ISO_ROOT/boot/grub"
 
-gcc -c "$ROOT_DIR/src/boot.S" -o "$BUILD_DIR/boot.o"
-rustc --edition 2024 --crate-type lib --emit obj -C panic=abort \
-    -C relocation-model=static -C code-model=kernel -C no-redzone=yes \
-    -C opt-level=2 -o "$BUILD_DIR/kernel.o" "$ROOT_DIR/src/main.rs"
-ld -m elf_x86_64 -T "$ROOT_DIR/linker.ld" -nostdlib -z max-page-size=0x1000 \
-    -o "$KERNEL" "$BUILD_DIR/boot.o" "$BUILD_DIR/kernel.o"
+# Cargo resolves the crate graph and performs the custom freestanding link.
+cargo rustc --manifest-path "$ROOT_DIR/kernel64/Cargo.toml" --release \
+    --bin open-kernel -- \
+    -C relocation-model=static \
+    -C linker=ld -C link-arg=-melf_x86_64 \
+    -C link-arg=-T"$ROOT_DIR/linker.ld" -C link-arg=-nostdlib \
+    -C link-arg=-z -C link-arg=max-page-size=0x1000
+cp "$ROOT_DIR/target/release/open-kernel" "$KERNEL"
 
 if ! grub-file --is-x86-multiboot2 "$KERNEL"; then
     printf 'Kernel is not a valid x86_64 Multiboot2 image.\n' >&2

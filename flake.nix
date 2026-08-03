@@ -16,7 +16,6 @@
             packages = with pkgs; [
               binutils
               cargo
-              gcc
               grub2
               rustc
               xorriso

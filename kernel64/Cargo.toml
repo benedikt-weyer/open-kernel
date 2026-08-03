@@ -1,0 +1,8 @@
+[package]
+name = "open-kernel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bootstrap = { path = "../bootstrap" }
+multiboot2 = { version = "0.25.0", default-features = false }

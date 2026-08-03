@@ -1,7 +1,15 @@
+#![no_std]
+
+use core::arch::global_asm;
+
+#[unsafe(no_mangle)]
+pub static BOOTSTRAP_LINK: u8 = 0;
+
+global_asm!(
+    r#"
 .section .multiboot, "a"
 .align 8
 
-# Multiboot2 header: magic, architecture, header length, checksum, end tag.
 multiboot_header_start:
 .long 0xE85250D6
 .long 0
@@ -20,6 +28,10 @@ p3_table:
 .skip 4096
 p2_table:
 .skip 4096
+boot_magic:
+.skip 4
+boot_info:
+.skip 4
 
 .align 16
 stack_bottom:
@@ -35,7 +47,10 @@ _start:
     cli
     mov $stack_top, %esp
 
-    # Identity-map the first GiB with 2 MiB pages, then enable long mode.
+    # Copy GRUB's handoff values before using any scratch registers.
+    mov %eax, boot_magic
+    mov %ebx, boot_info
+
     mov $p4_table, %edi
     xor %eax, %eax
     mov $3072, %ecx
@@ -62,7 +77,7 @@ _start:
     mov %eax, %cr3
 
     mov %cr4, %eax
-    or $0x20, %eax
+    or $0x620, %eax
     mov %eax, %cr4
 
     mov $0xC0000080, %ecx
@@ -71,7 +86,8 @@ _start:
     wrmsr
 
     mov %cr0, %eax
-    or $0x80000000, %eax
+    and $0xFFFFFFFB, %eax
+    or $0x80000002, %eax
     mov %eax, %cr0
 
     lgdt gdt64_pointer
@@ -84,6 +100,8 @@ long_mode_start:
     mov %ax, %es
     mov %ax, %ss
     mov $stack_top, %rsp
+    mov boot_magic(%rip), %edi
+    mov boot_info(%rip), %esi
     call kernel_main
 
 halt:
@@ -102,3 +120,6 @@ gdt64_pointer:
     .long gdt64
 
 .section .note.GNU-stack,"",@progbits
+"#,
+    options(att_syntax)
+);

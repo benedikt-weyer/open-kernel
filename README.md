@@ -1,7 +1,12 @@
 # open-kernel
 
-A minimal Rust x86_64 kernel that boots through GRUB using Multiboot2. It clears
-the VGA text buffer and displays a short status message.
+A minimal Rust x86_64 kernel that boots through GRUB using Multiboot2. It uses
+the `multiboot2` crate to validate GRUB's boot information, clears the VGA text
+buffer, and displays a short status message.
+
+The workspace separates the boot path from the kernel: `bootstrap` contains the
+32-bit Multiboot entry code and long-mode transition, while `kernel64` contains
+the x86_64 Rust kernel.
 
 ## Build a bootable ISO
 
@@ -23,6 +28,6 @@ scripts/run
 Additional QEMU options can be passed through, for example
 `scripts/run -m 256M`.
 
-The build compiles the kernel with `rustc` and the entry shim with `gcc`, then
-uses GNU `ld`, GRUB's `grub-file` and `grub-mkrescue`, and `xorriso`. These are
-provided by the development shell.
+The build uses Cargo to compile and link the kernel with GNU `ld`, then uses
+GRUB's `grub-file` and
+`grub-mkrescue`, and `xorriso`. These are provided by the development shell.
