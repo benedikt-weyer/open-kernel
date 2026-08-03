@@ -423,6 +423,7 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         31 => syscall_getrandom(pointer, length),
         32 => syscall_vfs_stat(pointer, length, argument),
         33 => syscall_process_spawn(pointer, length),
+        34 => crate::wait_process(pointer as usize).unwrap_or(u64::MAX),
         _ => u64::MAX,
     }
 }

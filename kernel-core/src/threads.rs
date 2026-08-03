@@ -53,9 +53,11 @@ impl UserContext {
 pub struct Process {
     pub id: ProcessId,
     pub address_space: u64,
+    parent: Option<ProcessId>,
+    main_thread: Option<ThreadId>,
 }
 impl Process {
-    const EMPTY: Self = Self { id: NO_THREAD, address_space: 0 };
+    const EMPTY: Self = Self { id: NO_THREAD, address_space: 0, parent: None, main_thread: None };
 }
 
 #[repr(C)]
@@ -236,7 +238,9 @@ pub fn initialize_user_process() {
     unsafe {
         let address_space: u64;
         asm!("mov {}, cr3", out(reg) address_space, options(nomem, nostack));
-        (*(&raw mut PROCESSES))[0] = Process { id: USER_PROCESS_ID, address_space };
+        (*(&raw mut PROCESSES))[0] = Process {
+            id: USER_PROCESS_ID, address_space, parent: None, main_thread: None,
+        };
     }
 }
 
@@ -245,12 +249,34 @@ pub fn create_process(address_space: u64) -> Option<ProcessId> {
         for slot in 1..MAX_PROCESSES {
             if (*(&raw const PROCESSES))[slot].id == NO_THREAD {
                 let id = slot + 1;
-                (*(&raw mut PROCESSES))[slot] = Process { id, address_space };
+                let parent = current_id().and_then(process_id);
+                (*(&raw mut PROCESSES))[slot] = Process {
+                    id, address_space, parent, main_thread: None,
+                };
                 return Some(id);
             }
         }
     }
     None
+}
+
+pub fn set_process_main_thread(process: ProcessId, thread: ThreadId) {
+    unsafe {
+        if let Some(record) = (*(&raw mut PROCESSES)).iter_mut().find(|record| record.id == process) {
+            record.main_thread = Some(thread);
+        }
+    }
+}
+
+pub fn wait_process(process: ProcessId) -> Option<u64> {
+    let current_process = current_id().and_then(process_id)?;
+    let main_thread = unsafe {
+        (*(&raw const PROCESSES))
+            .iter()
+            .find(|record| record.id == process && record.parent == Some(current_process))
+            .and_then(|record| record.main_thread)?
+    };
+    join(main_thread)
 }
 
 pub fn process_address_space(id: ProcessId) -> Option<u64> {

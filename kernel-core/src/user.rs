@@ -129,9 +129,11 @@ pub(crate) fn spawn(path: &[u8]) -> u64 {
     let Ok(loaded) = crate::load_user_elf_into(image, address_space, process) else {
         return u64::MAX;
     };
-    crate::spawn_user_for_process(process, loaded.entry, 0, 0, Some(loaded.stack_pointer))
-        .map(|_| process as u64)
-        .unwrap_or(u64::MAX)
+    let Some(thread) = crate::spawn_user_for_process(process, loaded.entry, 0, 0, Some(loaded.stack_pointer)) else {
+        return u64::MAX;
+    };
+    crate::set_process_main_thread(process, thread);
+    process as u64
 }
 
 pub(crate) fn chdir(path: &[u8]) -> u64 {
