@@ -49,6 +49,7 @@ struct Controller {
 
 static mut CONTROLLER: Option<Controller> = None;
 static mut IDENTIFY_MODEL: [u8; 40] = [b' '; 40];
+static mut IDENTIFY_SECTOR_COUNT: u64 = 0;
 
 pub struct SataBlockDevice;
 
@@ -118,6 +119,11 @@ pub fn identify() -> Result<(), SataError> {
             IDENTIFY_MODEL[index * 2] = read_volatile(source.add(54 + index * 2 + 1));
             IDENTIFY_MODEL[index * 2 + 1] = read_volatile(source.add(54 + index * 2));
         }
+        let mut sectors = 0_u64;
+        for index in 0..8 {
+            sectors |= u64::from(read_volatile(source.add(200 + index))) << (index * 8);
+        }
+        IDENTIFY_SECTOR_COUNT = sectors;
         Ok(())
     }
 }
@@ -127,6 +133,10 @@ pub fn identify_model_byte(index: usize) -> u8 {
         return b' ';
     }
     unsafe { core::ptr::read_volatile((&raw const IDENTIFY_MODEL).cast::<u8>().add(index)) }
+}
+
+pub fn sector_count() -> u64 {
+    unsafe { core::ptr::read_volatile(&raw const IDENTIFY_SECTOR_COUNT) }
 }
 
 pub fn read_first_sector() -> Result<[u8; 16], SataError> {

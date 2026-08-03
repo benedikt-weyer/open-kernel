@@ -46,7 +46,7 @@ pub use sata::{
     SataBlockDevice, SataError, identify as sata_identify,
     identify_model_byte as sata_identify_model_byte, initialize as initialize_sata,
     is_available as sata_available, read_first_sector as sata_read_first_sector,
-    read_sector as sata_read_sector,
+    read_sector as sata_read_sector, sector_count as sata_sector_count,
 };
 pub use storage::{
     File, FileSystem, InitRamFs, RamFs, RamFsError, create as create_ram_file,

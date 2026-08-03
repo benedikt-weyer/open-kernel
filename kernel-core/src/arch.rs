@@ -328,6 +328,7 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64) -> u64 {
         11 => syscall_sata_identify(),
         12 => syscall_sata_read(),
         13 => syscall_pci_status(),
+        14 => syscall_lsblk(),
         _ => u64::MAX,
     }
 }
@@ -405,6 +406,17 @@ fn syscall_pci_status() -> u64 {
     count as u64
 }
 
+fn syscall_lsblk() -> u64 {
+    if crate::sata_identify().is_err() {
+        console_output(b"NAME   TYPE  SECTORS\r\n(no block devices)\r\n");
+        return u64::MAX;
+    }
+    console_output(b"NAME   TYPE  SECTORS\r\nsata0  disk  ");
+    console_output_decimal(crate::sata_sector_count());
+    console_output(b"\r\n");
+    0
+}
+
 fn syscall_sata_identify() -> u64 {
     match crate::sata_identify() {
         Ok(()) => {
@@ -451,6 +463,24 @@ fn syscall_sata_read() -> u64 {
 fn console_output(bytes: &[u8]) {
     Com1.write(bytes);
     crate::console::user_console_write(bytes);
+}
+
+fn console_output_decimal(mut value: u64) {
+    let mut digits = [0_u8; 20];
+    let mut length = 0;
+    if value == 0 {
+        console_output(b"0");
+        return;
+    }
+    while value != 0 {
+        digits[length] = b'0' + (value % 10) as u8;
+        value /= 10;
+        length += 1;
+    }
+    while length != 0 {
+        length -= 1;
+        console_output(&digits[length..=length]);
+    }
 }
 
 fn copy_bytes(target: &mut [u8], source: &[u8]) -> usize {
