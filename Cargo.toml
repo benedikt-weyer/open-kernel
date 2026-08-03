@@ -5,6 +5,7 @@ members = [
     "multiboot2-adapter",
     "limine-adapter",
     "user-program",
+    "std-program",
 ]
 resolver = "3"
 
