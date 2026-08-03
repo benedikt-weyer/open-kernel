@@ -4,6 +4,7 @@ use crate::{
     DEVICE_WINDOW_BASE, PAGE_SIZE, allocate_physical_frame, map_device_page, physical_to_virtual,
     zero_physical_frame,
 };
+use crate::drivers::{BlockDevice, BlockDeviceError, Driver, DriverError};
 
 const HBA_GHC: usize = 0x04;
 const HBA_PI: usize = 0x0C;
@@ -49,6 +50,44 @@ struct Controller {
 
 static mut CONTROLLER: Option<Controller> = None;
 
+pub struct SataBlockDevice;
+
+impl SataBlockDevice {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Driver for SataBlockDevice {
+    fn name(&self) -> &'static str {
+        "ahci-sata"
+    }
+    fn initialize(&mut self) -> Result<(), DriverError> {
+        if is_available() {
+            return Ok(());
+        }
+        initialize().map_err(|error| match error {
+            SataError::NotFound | SataError::NoDevice => DriverError::Unsupported,
+            _ => DriverError::NotReady,
+        })
+    }
+}
+
+impl BlockDevice for SataBlockDevice {
+    fn sector_size(&self) -> usize {
+        512
+    }
+    fn read_sector(&self, lba: u64, buffer: &mut [u8]) -> Result<(), BlockDeviceError> {
+        if buffer.len() < self.sector_size() {
+            return Err(BlockDeviceError::BufferTooSmall);
+        }
+        read_sector(lba, &mut buffer[..self.sector_size()]).map_err(|error| match error {
+            SataError::NotFound | SataError::NoDevice => BlockDeviceError::NotReady,
+            _ => BlockDeviceError::DeviceError,
+        })
+    }
+}
+
 pub fn initialize() -> Result<(), SataError> {
     let Some(ahci) = crate::pci::find_ahci_controller() else {
         return Err(SataError::NotFound);
@@ -87,13 +126,30 @@ pub fn read_first_sector() -> Result<[u8; 16], SataError> {
     let controller = unsafe { CONTROLLER.ok_or(SataError::NotFound)? };
     unsafe {
         issue_command(controller, ATA_READ_DMA_EXT, 0)?;
-        let source = physical_to_virtual(controller.data_buffer);
-        let mut preview = [0; 16];
-        for (index, byte) in preview.iter_mut().enumerate() {
+    }
+    let mut preview = [0; 16];
+    let source = physical_to_virtual(controller.data_buffer);
+    for (index, byte) in preview.iter_mut().enumerate() {
+        unsafe {
             *byte = read_volatile(source.add(index));
         }
-        Ok(preview)
     }
+    Ok(preview)
+}
+
+pub fn read_sector(lba: u64, buffer: &mut [u8]) -> Result<(), SataError> {
+    if buffer.len() < 512 {
+        return Err(SataError::DeviceError);
+    }
+    let controller = unsafe { CONTROLLER.ok_or(SataError::NotFound)? };
+    unsafe {
+        issue_command(controller, ATA_READ_DMA_EXT, lba)?;
+        let source = physical_to_virtual(controller.data_buffer);
+        for (index, byte) in buffer[..512].iter_mut().enumerate() {
+            *byte = read_volatile(source.add(index));
+        }
+    }
+    Ok(())
 }
 
 fn initialize_controller(mmio: *mut u8) -> Result<Controller, SataError> {

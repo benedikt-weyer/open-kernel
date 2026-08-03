@@ -4,6 +4,18 @@ pub trait Driver {
 }
 
 #[derive(Clone, Copy)]
+pub enum BlockDeviceError {
+    NotReady,
+    DeviceError,
+    BufferTooSmall,
+}
+
+pub trait BlockDevice: Driver {
+    fn sector_size(&self) -> usize;
+    fn read_sector(&self, lba: u64, buffer: &mut [u8]) -> Result<(), BlockDeviceError>;
+}
+
+#[derive(Clone, Copy)]
 pub enum DriverError {
     Unsupported,
     NotReady,

@@ -23,7 +23,9 @@ use serial::{Com1, SerialOutput};
 pub use arch::timer_ticks;
 pub use arch::shutdown;
 pub use console::{BootInfo, BootStatus, Display, Framebuffer, boot};
-pub use drivers::{Driver, DriverError, LoopbackNetworkDriver, NetworkDriver};
+pub use drivers::{
+    BlockDevice, BlockDeviceError, Driver, DriverError, LoopbackNetworkDriver, NetworkDriver,
+};
 pub use elf::{ElfError, LoadedImage, load_user_elf};
 pub use keyboard::Ps2KeyboardDriver;
 pub use memory::{
@@ -40,7 +42,11 @@ pub use paging::{
     zero_physical_frame,
 };
 pub use scheduler::{TaskEntry, spawn as spawn_task, start as start_scheduler, yield_now};
-pub use sata::{SataError, identify as sata_identify, initialize as initialize_sata, is_available as sata_available, read_first_sector as sata_read_first_sector};
+pub use sata::{
+    SataBlockDevice, SataError, identify as sata_identify, initialize as initialize_sata,
+    is_available as sata_available, read_first_sector as sata_read_first_sector,
+    read_sector as sata_read_sector,
+};
 pub use storage::{
     File, FileSystem, InitRamFs, RamFs, RamFsError, create as create_ram_file,
     delete as delete_ram_file, file_count, open as open_file, ram_file_count,
