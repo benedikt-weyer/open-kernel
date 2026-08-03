@@ -3,23 +3,13 @@
 use core::ffi::c_void;
 
 unsafe extern "C" {
-    fn openkernel_main();
+    fn main();
 }
-
-static mut TLS_TCB: [u8; 128] = [0; 128];
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     unsafe {
-        let base = (&raw mut TLS_TCB).cast::<u8>().add(32);
-        (base as *mut u64).write(base as u64);
-        core::arch::asm!(
-            "syscall",
-            inlateout("rax") 30_u64 => _,
-            in("rdi") base as u64,
-            clobber_abi("sysv64"),
-        );
-        openkernel_main();
+        main();
         core::arch::asm!(
             "syscall",
             in("rax") 16_u64,
