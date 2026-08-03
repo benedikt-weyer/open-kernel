@@ -3,7 +3,8 @@
 
 use core::panic::PanicInfo;
 use kernel_core::{
-    BootInfo, BootStatus, Display, Framebuffer, MemoryRegion, MemoryRegionKind, PhysicalMemoryRange,
+    BootInfo, BootStatus, Display, Framebuffer, MemoryRegion, MemoryRegionKind, PagingConfig,
+    PhysicalMemoryRange,
 };
 use multiboot2::{BootInformation, BootInformationHeader, MAGIC, MemoryAreaType};
 
@@ -67,6 +68,12 @@ pub extern "C" fn kernel_main(magic: u32, boot_info_address: usize) -> ! {
                         kernel_end_address - kernel_start_address,
                     )],
                 );
+                let _ = kernel_core::initialize_virtual_memory(PagingConfig::new(
+                    0,
+                    kernel_start_address,
+                    kernel_start_address,
+                    kernel_end_address - kernel_start_address,
+                ));
                 (display, BootStatus::Ready)
             }
             Err(_) => {

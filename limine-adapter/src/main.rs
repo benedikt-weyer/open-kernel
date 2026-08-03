@@ -3,14 +3,15 @@
 
 use core::{arch::asm, panic::PanicInfo};
 use kernel_core::{
-    BootInfo, BootStatus, Display, Framebuffer, MemoryRegion, MemoryRegionKind, PhysicalMemoryRange,
+    BootInfo, BootStatus, Display, Framebuffer, MemoryRegion, MemoryRegionKind, PagingConfig,
+    PhysicalMemoryRange,
 };
 use limine::{
     BaseRevision,
     memory_map::EntryType,
     request::{
-        EntryPointRequest, ExecutableAddressRequest, FramebufferRequest, MemoryMapRequest,
-        RequestsEndMarker, RequestsStartMarker,
+        EntryPointRequest, ExecutableAddressRequest, FramebufferRequest, HhdmRequest,
+        MemoryMapRequest, RequestsEndMarker, RequestsStartMarker,
     },
 };
 
@@ -38,6 +39,10 @@ static MEMORY_MAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 static EXECUTABLE_ADDRESS_REQUEST: ExecutableAddressRequest = ExecutableAddressRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -100,6 +105,16 @@ pub extern "C" fn limine_entry() -> ! {
             }),
         [kernel_range],
     );
+    let physical_offset = HHDM_REQUEST
+        .get_response()
+        .map(|response| response.offset())
+        .unwrap_or(0);
+    let _ = kernel_core::initialize_virtual_memory(PagingConfig::new(
+        physical_offset,
+        kernel_start_address,
+        kernel_range.base,
+        kernel_range.length,
+    ));
 
     kernel_core::boot(BootInfo::new(display, "Limine", status));
 }

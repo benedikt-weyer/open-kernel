@@ -3,6 +3,7 @@
 mod arch;
 mod console;
 mod memory;
+mod paging;
 mod serial;
 
 use arch::{Architecture, X86_64};
@@ -14,6 +15,10 @@ pub use memory::{
     MemoryRegion, MemoryRegionKind, PAGE_SIZE, PhysicalFrameAllocator, PhysicalMemoryRange,
     PhysicalMemoryStats, allocate_physical_frame, free_physical_frame, initialize_physical_memory,
     physical_memory_stats,
+};
+pub use paging::{
+    DEVICE_WINDOW_BASE, FUTURE_USER_SPACE_BASE, KERNEL_STACK_GUARD_PAGE, PageFlags, PagingConfig,
+    PagingError, initialize_virtual_memory, map_user_page,
 };
 
 pub fn halt() -> ! {
