@@ -171,6 +171,11 @@ fn run_framebuffer_console(
                 redraw = true;
             }
             Some(8) => {}
+            Some(b'\t') => {
+                if complete_command(&mut input, &mut input_length) {
+                    redraw = true;
+                }
+            }
             Some(character) if input_length < input.len() => {
                 input[input_length] = character;
                 input_length += 1;
@@ -189,6 +194,49 @@ fn run_framebuffer_console(
             );
         }
     }
+}
+
+fn complete_command(input: &mut [u8; 64], input_length: &mut usize) -> bool {
+    const COMMANDS: [&[u8]; 5] = [b"help", b"clear", b"resolution", b"bootloader", b"halt"];
+    let prefix = &input[..*input_length];
+    let mut match_command = None;
+
+    for command in COMMANDS {
+        if command_has_prefix(command, prefix) {
+            if match_command.is_some() {
+                return false;
+            }
+            match_command = Some(command);
+        }
+    }
+
+    let Some(command) = match_command else {
+        return false;
+    };
+    if command.len() > input.len() || command_has_prefix(prefix, command) {
+        return false;
+    }
+    for (index, byte) in command.iter().enumerate() {
+        unsafe {
+            core::ptr::write_volatile(input.as_mut_ptr().add(index), *byte);
+        }
+    }
+    *input_length = command.len();
+    true
+}
+
+fn command_has_prefix(command: &[u8], prefix: &[u8]) -> bool {
+    if prefix.len() > command.len() {
+        return false;
+    }
+    for index in 0..prefix.len() {
+        let command_byte = unsafe { core::ptr::read_volatile(command.as_ptr().add(index)) };
+        let prefix_byte = unsafe { core::ptr::read_volatile(prefix.as_ptr().add(index)) };
+        if command_byte != prefix_byte {
+            return false;
+        }
+    }
+    true
 }
 
 fn render_framebuffer_console(
@@ -317,6 +365,7 @@ fn decode_scancode(scancode: u8) -> Option<u8> {
     match scancode {
         0x02..=0x0B => Some(b'1' + scancode - 0x02),
         0x0E => Some(8),
+        0x0F => Some(b'\t'),
         0x10 => Some(b'q'),
         0x11 => Some(b'w'),
         0x12 => Some(b'e'),
