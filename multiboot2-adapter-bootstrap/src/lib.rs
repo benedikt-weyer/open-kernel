@@ -15,9 +15,19 @@ multiboot_header_start:
 .long 0
 .long multiboot_header_end - multiboot_header_start
 .long -(0xE85250D6 + 0 + (multiboot_header_end - multiboot_header_start))
+# Request a 32-bit RGB framebuffer from GRUB.
+.short 5
+.short 0
+.long 20
+.long 1024
+.long 768
+.long 32
+.align 8
+
 .short 0
 .short 0
 .long 8
+
 multiboot_header_end:
 
 .section .bss
@@ -26,8 +36,8 @@ p4_table:
 .skip 4096
 p3_table:
 .skip 4096
-p2_table:
-.skip 4096
+p2_tables:
+.skip 16384
 boot_magic:
 .skip 4
 boot_info:
@@ -60,13 +70,20 @@ _start:
     or $0x3, %eax
     mov %eax, p4_table
 
-    mov $p2_table, %eax
+    mov $p2_tables, %eax
     or $0x3, %eax
     mov %eax, p3_table
+    add $0x1000, %eax
+    mov %eax, p3_table + 8
+    add $0x1000, %eax
+    mov %eax, p3_table + 16
+    add $0x1000, %eax
+    mov %eax, p3_table + 24
 
-    mov $p2_table, %edi
+    # Identity map the first 4 GiB, including QEMU's framebuffer aperture.
+    mov $p2_tables, %edi
     mov $0x83, %eax
-    mov $512, %ecx
+    mov $2048, %ecx
 1:
     mov %eax, (%edi)
     add $8, %edi
