@@ -138,6 +138,10 @@ fn run_framebuffer_console(
     let mut input_length = 0;
     let mut response = [0_u8; 80];
     let mut response_length = copy_text(&mut response, b"TYPE HELP");
+    let mut completion_prefix = [0_u8; 64];
+    let mut completion_length = 0;
+    let mut completion_index = 0;
+    let mut completion_active = false;
 
     render_framebuffer_console(
         &framebuffer,
@@ -164,21 +168,46 @@ fn run_framebuffer_console(
                     framebuffer.height,
                 );
                 input_length = 0;
+                completion_active = false;
                 redraw = true;
             }
             Some(8) if input_length > 0 => {
                 input_length -= 1;
+                completion_active = false;
                 redraw = true;
             }
             Some(8) => {}
             Some(b'\t') => {
-                if complete_command(&mut input, &mut input_length) {
+                if !completion_active {
+                    for index in 0..input_length {
+                        unsafe {
+                            core::ptr::write_volatile(
+                                completion_prefix.as_mut_ptr().add(index),
+                                core::ptr::read_volatile(input.as_ptr().add(index)),
+                            );
+                        }
+                    }
+                    completion_length = input_length;
+                    completion_index = 0;
+                    completion_active = true;
+                } else {
+                    completion_index += 1;
+                }
+                if complete_command(
+                    &mut input,
+                    &mut input_length,
+                    &completion_prefix[..completion_length],
+                    completion_index,
+                    &mut response,
+                    &mut response_length,
+                ) {
                     redraw = true;
                 }
             }
             Some(character) if input_length < input.len() => {
                 input[input_length] = character;
                 input_length += 1;
+                completion_active = false;
                 redraw = true;
             }
             _ => {}
@@ -196,18 +225,65 @@ fn run_framebuffer_console(
     }
 }
 
-fn complete_command(input: &mut [u8; 64], input_length: &mut usize) -> bool {
+fn complete_command(
+    input: &mut [u8; 64],
+    input_length: &mut usize,
+    prefix: &[u8],
+    completion_index: usize,
+    response: &mut [u8; 80],
+    response_length: &mut usize,
+) -> bool {
     const COMMANDS: [&[u8]; 5] = [b"help", b"clear", b"resolution", b"bootloader", b"halt"];
-    let prefix = &input[..*input_length];
     let mut match_command = None;
 
     for command in COMMANDS {
         if command_has_prefix(command, prefix) {
-            if match_command.is_some() {
-                return false;
+            if match_command.is_none() {
+                match_command = Some(command);
             }
-            match_command = Some(command);
         }
+    }
+
+    let matching_count = COMMANDS
+        .iter()
+        .filter(|command| command_has_prefix(command, prefix))
+        .count();
+    if matching_count > 1 {
+        let mut length = 0;
+        for command in COMMANDS {
+            if !command_has_prefix(command, prefix) {
+                continue;
+            }
+            if length != 0 && length < response.len() {
+                response[length] = b' ';
+                length += 1;
+            }
+            for byte in command {
+                if length == response.len() {
+                    break;
+                }
+                response[length] = *byte;
+                length += 1;
+            }
+        }
+        *response_length = length;
+        let selected = completion_index % matching_count;
+        let mut seen = 0;
+        for command in COMMANDS {
+            if command_has_prefix(command, prefix) {
+                if seen == selected {
+                    for (index, byte) in command.iter().enumerate() {
+                        unsafe {
+                            core::ptr::write_volatile(input.as_mut_ptr().add(index), *byte);
+                        }
+                    }
+                    *input_length = command.len();
+                    break;
+                }
+                seen += 1;
+            }
+        }
+        return true;
     }
 
     let Some(command) = match_command else {
