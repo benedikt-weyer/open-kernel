@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+
+cat <<'EOF'
+open-kernel development commands
+
+Environment
+  nix develop              Enter the development shell.
+  direnv allow             Allow the repository .envrc; adds scripts/ to PATH.
+
+Build
+  build-iso                Build build/open-kernel.iso with GRUB.
+
+Run
+  qemu-system-x86_64 -cdrom build/open-kernel.iso
+  run                      Build the ISO and start it in QEMU.
+
+Nix
+  nix develop              Open the development shell without direnv.
+  nix flake check          Evaluate and check the development flake.
+
+Run this help again with: help
+EOF

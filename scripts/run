@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+"$ROOT_DIR/scripts/build-iso"
+exec qemu-system-x86_64 -m 128M -cdrom "$ROOT_DIR/build/open-kernel.iso" "$@"

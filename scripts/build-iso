@@ -1,0 +1,36 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+BUILD_DIR="$ROOT_DIR/build"
+ISO_ROOT="$BUILD_DIR/iso-root"
+KERNEL="$BUILD_DIR/open-kernel.elf"
+ISO="$BUILD_DIR/open-kernel.iso"
+
+for command in gcc ld grub-file grub-mkrescue rustc xorriso; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+        printf 'Missing required command: %s\n' "$command" >&2
+        exit 1
+    fi
+done
+
+rm -rf "$ISO_ROOT"
+mkdir -p "$BUILD_DIR" "$ISO_ROOT/boot/grub"
+
+gcc -c "$ROOT_DIR/src/boot.S" -o "$BUILD_DIR/boot.o"
+rustc --edition 2024 --crate-type lib --emit obj -C panic=abort \
+    -C relocation-model=static -C code-model=kernel -C no-redzone=yes \
+    -C opt-level=2 -o "$BUILD_DIR/kernel.o" "$ROOT_DIR/src/main.rs"
+ld -m elf_x86_64 -T "$ROOT_DIR/linker.ld" -nostdlib -z max-page-size=0x1000 \
+    -o "$KERNEL" "$BUILD_DIR/boot.o" "$BUILD_DIR/kernel.o"
+
+if ! grub-file --is-x86-multiboot2 "$KERNEL"; then
+    printf 'Kernel is not a valid x86_64 Multiboot2 image.\n' >&2
+    exit 1
+fi
+
+cp "$KERNEL" "$ISO_ROOT/boot/open-kernel.elf"
+cp "$ROOT_DIR/grub.cfg" "$ISO_ROOT/boot/grub/grub.cfg"
+grub-mkrescue -o "$ISO" "$ISO_ROOT"
+
+printf 'Created %s\n' "$ISO"
