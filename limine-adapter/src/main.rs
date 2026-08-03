@@ -139,7 +139,11 @@ pub extern "C" fn limine_entry() -> ! {
         for module in response.modules() {
             let data =
                 unsafe { core::slice::from_raw_parts(module.addr() as *const u8, module.size() as usize) };
-            let _ = kernel_core::register_boot_file("init", data);
+            let name = match module.cmdline() {
+                "std-smoke" => "std-smoke",
+                _ => "init",
+            };
+            let _ = kernel_core::register_boot_file(name, data);
         }
     }
 
