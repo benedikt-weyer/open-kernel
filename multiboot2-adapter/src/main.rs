@@ -45,6 +45,6 @@ pub extern "C" fn kernel_main(magic: u32, boot_info_address: usize) -> ! {
 }
 
 #[panic_handler]
-fn panic(_: &PanicInfo) -> ! {
-    kernel_core::halt()
+fn panic(info: &PanicInfo) -> ! {
+    kernel_core::panic(info)
 }

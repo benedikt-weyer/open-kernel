@@ -1,6 +1,6 @@
 #![no_std]
 
-use core::arch::asm;
+use core::{arch::asm, panic::PanicInfo};
 use core::ptr::write_volatile;
 
 const VGA_TEXT_BUFFER: *mut u16 = 0xB8000 as *mut u16;
@@ -87,6 +87,11 @@ pub fn halt() -> ! {
             asm!("hlt", options(nomem, nostack));
         }
     }
+}
+
+pub fn panic(_: &PanicInfo) -> ! {
+    serial_write(b"open-kernel: panic\r\n");
+    halt()
 }
 
 fn paint_vga(bootloader: &[u8], status: BootStatus) {
