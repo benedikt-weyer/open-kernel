@@ -9,6 +9,7 @@ const PROGRAM_HEADER_SIZE: usize = 56;
 const ELF_MACHINE_X86_64: u16 = 0x3E;
 const ELF_TYPE_EXECUTABLE: u16 = 2;
 const PROGRAM_HEADER_LOAD: u32 = 1;
+const PROGRAM_HEADER_TLS: u32 = 7;
 const PROGRAM_FLAG_EXECUTE: u32 = 1;
 const PROGRAM_FLAG_WRITE: u32 = 2;
 const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
@@ -17,6 +18,15 @@ const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
 pub struct LoadedImage {
     pub entry: u64,
     pub stack_pointer: u64,
+    pub tls: Option<TlsImage>,
+}
+
+#[derive(Clone, Copy)]
+pub struct TlsImage {
+    pub file_offset: u64,
+    pub file_size: u64,
+    pub memory_size: u64,
+    pub align: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -73,9 +83,28 @@ pub fn load_user_elf_into(
     }
 
     let mut entry_is_executable = false;
+    let mut tls = None;
     for index in 0..program_header_count {
         let header_offset = program_header_offset + index * PROGRAM_HEADER_SIZE;
-        if read_u32(image, header_offset)? != PROGRAM_HEADER_LOAD {
+        let header_type = read_u32(image, header_offset)?;
+        if header_type == PROGRAM_HEADER_TLS {
+            if tls.is_some() {
+                return Err(ElfError::InvalidProgramHeader);
+            }
+            let file_offset = read_u64(image, header_offset + 8)?;
+            let file_size = read_u64(image, header_offset + 32)?;
+            let memory_size = read_u64(image, header_offset + 40)?;
+            let align = read_u64(image, header_offset + 48)?;
+            if memory_size < file_size
+                || file_offset.checked_add(file_size).is_none_or(|end| end > image.len() as u64)
+                || (align != 0 && !align.is_power_of_two())
+            {
+                return Err(ElfError::InvalidProgramHeader);
+            }
+            tls = Some(TlsImage { file_offset, file_size, memory_size, align });
+            continue;
+        }
+        if header_type != PROGRAM_HEADER_LOAD {
             continue;
         }
         let flags = read_u32(image, header_offset + 4)?;
@@ -144,6 +173,7 @@ pub fn load_user_elf_into(
         // `_start` is a Rust function entry point, so emulate a normal call:
         // the System V ABI requires RSP to be 8 modulo 16 on entry.
         stack_pointer: stack_top - 8,
+        tls,
     })
 }
 

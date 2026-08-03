@@ -29,7 +29,7 @@ pub use console::{BootInfo, BootStatus, Display, Framebuffer, boot};
 pub use drivers::{
     BlockDevice, BlockDeviceError, Driver, DriverError, LoopbackNetworkDriver, NetworkDriver,
 };
-pub use elf::{ElfError, LoadedImage, load_user_elf, load_user_elf_into};
+pub use elf::{ElfError, LoadedImage, TlsImage, load_user_elf, load_user_elf_into};
 pub use keyboard::Ps2KeyboardDriver;
 pub use memory::{
     MemoryRegion, MemoryRegionKind, PAGE_SIZE, PhysicalFrameAllocator, PhysicalMemoryRange,
