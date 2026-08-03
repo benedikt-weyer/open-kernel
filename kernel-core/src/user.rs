@@ -453,6 +453,10 @@ fn initialize_process_stack(stack_pointer: u64, program_name: &[u8], argv: &[&[u
     write_user_bytes(cursor, pwd);
     cursor &= !0xF;
 
+    // Rust's entry function is called as a normal SysV function. Leave one
+    // padding word above the startup vector so RSP is 8 modulo 16 at entry.
+    cursor -= 8;
+    write_user_word(cursor, 0);
     for value in [0, pwd_pointer, path_pointer, 0] {
         cursor -= 8;
         unsafe { core::ptr::write_volatile(cursor as *mut u64, value) };
