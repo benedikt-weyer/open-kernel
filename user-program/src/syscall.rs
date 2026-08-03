@@ -94,14 +94,57 @@ pub fn join_thread(id: u64) -> Option<u64> {
     (status != u64::MAX).then_some(status)
 }
 
-pub fn spawn_process(path: &str) -> Option<u64> {
-    let id = syscall3(33, path.as_ptr() as u64, path.len() as u64, 0);
+/// Spawns `path`, optionally with a single argument (copied into a small
+/// NUL-terminated stack buffer for the kernel's argv reader).
+pub fn spawn_process(path: &str, argument: Option<&str>) -> Option<u64> {
+    let mut buffer = [0_u8; 32];
+    let mut pointer = [0_u64; 1];
+    let argv = match argument {
+        Some(text) => {
+            let bytes = text.as_bytes();
+            let length = bytes.len().min(buffer.len() - 1);
+            buffer[..length].copy_from_slice(&bytes[..length]);
+            pointer[0] = buffer.as_ptr() as u64;
+            pointer.as_ptr() as u64
+        }
+        None => 0,
+    };
+    let id = syscall3(33, path.as_ptr() as u64, path.len() as u64, argv);
     (id != u64::MAX).then_some(id)
 }
 
 pub fn wait_process(id: u64) -> Option<u64> {
     let status = syscall1(34, id);
     (status != u64::MAX).then_some(status)
+}
+
+pub fn terminate_process(id: u64) -> bool {
+    syscall1(39, id) != 0
+}
+
+/// Opens a new pty, returning a handle to its master side.
+pub fn open_pty() -> Option<u64> {
+    let id = syscall0(42);
+    (id != u64::MAX).then_some(id)
+}
+
+pub fn read_pty_master(id: u64, buffer: &mut [u8]) -> Option<usize> {
+    let count = syscall3(43, id, buffer.as_mut_ptr() as u64, buffer.len() as u64);
+    (count != u64::MAX).then_some(count as usize)
+}
+
+pub fn write_pty_master(id: u64, bytes: &[u8]) -> Option<usize> {
+    let count = syscall3(44, id, bytes.as_ptr() as u64, bytes.len() as u64);
+    (count != u64::MAX).then_some(count as usize)
+}
+
+/// Attaches this process's own console I/O to `id`'s slave side.
+pub fn attach_pty(id: u64) -> bool {
+    syscall1(45, id) == 0
+}
+
+pub fn close_pty(id: u64) -> bool {
+    syscall1(46, id) == 0
 }
 
 pub fn vfs_open(path: &str, flags: u64) -> Option<u64> {

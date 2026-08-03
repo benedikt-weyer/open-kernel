@@ -8,10 +8,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Condvar, Mutex};
 
 const HELP: &str =
-    "COMMANDS: HELP CLEAR EXIT SHUTDOWN REBOOT SATA IDENTIFY READ PCI LSBLK THREADS HEAP VFS ENV TIME SYNC RUN LS\r\n";
-const COMMANDS: [&str; 18] = [
+    "COMMANDS: HELP CLEAR EXIT SHUTDOWN REBOOT SATA IDENTIFY READ PCI LSBLK THREADS HEAP VFS ENV TIME SYNC RUN LS PTY\r\n";
+const COMMANDS: [&str; 19] = [
     "help", "clear", "exit", "shutdown", "reboot", "sata", "identify", "read", "pci", "lsblk",
-    "threads", "heap", "vfs", "env", "time", "sync", "run", "ls",
+    "threads", "heap", "vfs", "env", "time", "sync", "run", "ls", "pty",
 ];
 
 static SYNC_MUTEX: Mutex<()> = Mutex::new(());
@@ -20,10 +20,24 @@ static SYNC_READY: AtomicU32 = AtomicU32::new(0);
 static TLS_WORD: u64 = 0x544C_535F_4F4B_0001;
 
 fn main() {
-    let tty = std::env::args().nth(1).and_then(|argument| argument.parse().ok()).unwrap_or(0);
-    syscall::bind_tty(tty);
+    let banner = match std::env::args().nth(1).as_deref().and_then(|spec| spec.split_once(':')) {
+        Some(("pty", id)) => {
+            let id: u64 = id.parse().unwrap_or(0);
+            syscall::attach_pty(id);
+            format!("PTY {id}")
+        }
+        Some(("tty", id)) => {
+            let tty: u64 = id.parse().unwrap_or(0);
+            syscall::bind_tty(tty);
+            format!("TTY {tty}")
+        }
+        _ => {
+            syscall::bind_tty(0);
+            "TTY 0".to_string()
+        }
+    };
     syscall::clear_screen();
-    eprint!("OPEN KERNEL USER CONSOLE (TTY {tty})\r\nTYPE HELP\r\n> ");
+    eprint!("OPEN KERNEL USER CONSOLE ({banner})\r\nTYPE HELP\r\n> ");
 
     let mut input = String::new();
     loop {

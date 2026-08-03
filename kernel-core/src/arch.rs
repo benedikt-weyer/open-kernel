@@ -388,13 +388,17 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         }
         4 => syscall_spawn(),
         5 => syscall_sleep(pointer),
-        6 => crate::console::poll_user_key(crate::user::current_tty()).map(u64::from).unwrap_or(0),
+        6 => syscall_poll_key(),
         7 => {
-            crate::console::user_console_clear(crate::user::current_tty());
+            if let crate::user::ConsoleTarget::Tty(tty) = crate::user::console_target() {
+                crate::console::user_console_clear(tty);
+            }
             0
         }
         8 => {
-            crate::console::user_console_backspace(crate::user::current_tty());
+            if let crate::user::ConsoleTarget::Tty(tty) = crate::user::console_target() {
+                crate::console::user_console_backspace(tty);
+            }
             0
         }
         9 => crate::shutdown(),
@@ -433,8 +437,35 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
             crate::user::bind_tty(pointer as usize);
             0
         }
+        42 => crate::pty::open().map(|id| id as u64).unwrap_or(u64::MAX),
+        43 => syscall_pty_read_master(pointer, length, argument),
+        44 => syscall_pty_write_master(pointer, length, argument),
+        45 => syscall_pty_attach_slave(pointer),
+        46 => u64::from(crate::pty::close(pointer as usize)),
         _ => u64::MAX,
     }
+}
+
+fn syscall_pty_read_master(pty_id: u64, buffer: u64, length: u64) -> u64 {
+    let Some(output) = user_bytes_mut(buffer, length, 256) else {
+        return u64::MAX;
+    };
+    crate::pty::read_master(pty_id as usize, output).map(|count| count as u64).unwrap_or(u64::MAX)
+}
+
+fn syscall_pty_write_master(pty_id: u64, buffer: u64, length: u64) -> u64 {
+    let Some(input) = user_bytes(buffer, length, 256) else {
+        return u64::MAX;
+    };
+    crate::pty::write_master(pty_id as usize, input).map(|count| count as u64).unwrap_or(u64::MAX)
+}
+
+fn syscall_pty_attach_slave(pty_id: u64) -> u64 {
+    if !crate::pty::exists(pty_id as usize) {
+        return u64::MAX;
+    }
+    crate::user::bind_pty(pty_id as usize);
+    0
 }
 
 /// Reaps one exited child of the caller (known service or reparented
@@ -669,7 +700,7 @@ fn syscall_write(pointer: u64, length: u64) -> u64 {
         return u64::MAX;
     };
     Com1.write(bytes);
-    crate::console::user_console_write(crate::user::current_tty(), bytes);
+    console_write(bytes);
     length
 }
 
@@ -787,7 +818,26 @@ fn syscall_sata_read() -> u64 {
 
 fn console_output(bytes: &[u8]) {
     Com1.write(bytes);
-    crate::console::user_console_write(crate::user::current_tty(), bytes);
+    console_write(bytes);
+}
+
+/// Routes console output to wherever the calling process's console
+/// syscalls currently point: a real virtual terminal, or a pty's slave
+/// side if a controlling process is driving it programmatically.
+fn console_write(bytes: &[u8]) {
+    match crate::user::console_target() {
+        crate::user::ConsoleTarget::Tty(tty) => crate::console::user_console_write(tty, bytes),
+        crate::user::ConsoleTarget::Pty(pty) => crate::pty::slave_write(pty, bytes),
+    }
+}
+
+fn syscall_poll_key() -> u64 {
+    match crate::user::console_target() {
+        crate::user::ConsoleTarget::Tty(tty) => crate::console::poll_user_key(tty),
+        crate::user::ConsoleTarget::Pty(pty) => crate::pty::slave_poll_key(pty),
+    }
+    .map(u64::from)
+    .unwrap_or(0)
 }
 
 fn console_output_decimal(mut value: u64) {

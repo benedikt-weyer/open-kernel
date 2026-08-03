@@ -8,6 +8,7 @@ mod memory;
 mod mouse;
 mod pci;
 mod paging;
+mod pty;
 mod random;
 #[path = "threads.rs"]
 mod scheduler;

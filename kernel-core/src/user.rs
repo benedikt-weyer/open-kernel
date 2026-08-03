@@ -51,6 +51,15 @@ impl Descriptor {
 }
 static mut FILE_DESCRIPTORS: [Descriptor; MAX_FDS] = [Descriptor::EMPTY; MAX_FDS];
 
+/// Where a process's console syscalls (write/poll-key/clear/backspace) go:
+/// a real switchable virtual terminal, or the slave side of a pty another
+/// process is driving programmatically.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConsoleTarget {
+    Tty(usize),
+    Pty(usize),
+}
+
 #[derive(Clone, Copy)]
 struct ProcessUserState {
     heap_break: u64,
@@ -59,13 +68,13 @@ struct ProcessUserState {
     cwd_length: usize,
     executable_entry: u64,
     descriptors: [Descriptor; MAX_FDS],
-    tty: usize,
+    console: ConsoleTarget,
 }
 impl ProcessUserState {
     const EMPTY: Self = Self {
         heap_break: USER_HEAP_BASE, heap_mapped_end: USER_HEAP_BASE,
         cwd: [0; CURRENT_DIRECTORY_MAX], cwd_length: 1, executable_entry: 0,
-        descriptors: [Descriptor::EMPTY; MAX_FDS], tty: 0,
+        descriptors: [Descriptor::EMPTY; MAX_FDS], console: ConsoleTarget::Tty(0),
     };
 }
 static mut PROCESS_STATE: [ProcessUserState; 8] = [ProcessUserState::EMPTY; 8];
@@ -172,7 +181,7 @@ pub(crate) fn spawn(path: &[u8], argv: &[&[u8]]) -> u64 {
         state.cwd[0] = b'/';
         state.cwd_length = 1;
         state.executable_entry = 0;
-        state.tty = 0;
+        state.console = ConsoleTarget::Tty(0);
         for index in 0..MAX_FDS {
             core::ptr::write_volatile(&raw mut state.descriptors[index], Descriptor::EMPTY);
         }
@@ -195,15 +204,22 @@ pub(crate) fn spawn(path: &[u8], argv: &[&[u8]]) -> u64 {
     process as u64
 }
 
-/// The virtual terminal the calling process's console I/O syscalls
-/// (write/clear/backspace/poll-key) operate on.
-pub(crate) fn current_tty() -> usize {
-    unsafe { (*(&raw const PROCESS_STATE))[current_state_slot()].tty }
+/// Where the calling process's console I/O syscalls
+/// (write/clear/backspace/poll-key) go.
+pub(crate) fn console_target() -> ConsoleTarget {
+    unsafe { (*(&raw const PROCESS_STATE))[current_state_slot()].console }
 }
 
 pub(crate) fn bind_tty(tty: usize) {
     unsafe {
-        (*(&raw mut PROCESS_STATE))[current_state_slot()].tty = tty.min(crate::console::TTY_COUNT - 1);
+        (*(&raw mut PROCESS_STATE))[current_state_slot()].console =
+            ConsoleTarget::Tty(tty.min(crate::console::TTY_COUNT - 1));
+    }
+}
+
+pub(crate) fn bind_pty(pty: usize) {
+    unsafe {
+        (*(&raw mut PROCESS_STATE))[current_state_slot()].console = ConsoleTarget::Pty(pty);
     }
 }
 
