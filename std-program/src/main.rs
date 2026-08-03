@@ -1,8 +1,9 @@
 #![no_main]
 
-mod runtime;
+use openkernel_rt as _;
 
-fn main() {
+#[unsafe(no_mangle)]
+pub extern "C" fn openkernel_main() {
     let mut values = Vec::new();
     values.extend_from_slice(&[3_u64, 5, 8, 13]);
 

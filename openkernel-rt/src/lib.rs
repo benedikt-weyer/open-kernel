@@ -1,4 +1,10 @@
+#![no_std]
+
 use core::ffi::c_void;
+
+unsafe extern "C" {
+    fn openkernel_main();
+}
 
 static mut TLS_TCB: [u8; 128] = [0; 128];
 
@@ -13,9 +19,7 @@ pub extern "C" fn _start() -> ! {
             in("rdi") base as u64,
             clobber_abi("sysv64"),
         );
-    }
-    crate::main();
-    unsafe {
+        openkernel_main();
         core::arch::asm!(
             "syscall",
             in("rax") 16_u64,
@@ -60,9 +64,7 @@ unsafe extern "C" fn memcmp(left: *const c_void, right: *const c_void, len: usiz
         let (left, right) = unsafe {
             ((left as *const u8).add(index).read(), (right as *const u8).add(index).read())
         };
-        if left != right {
-            return i32::from(left) - i32::from(right);
-        }
+        if left != right { return i32::from(left) - i32::from(right); }
     }
     0
 }
@@ -70,8 +72,6 @@ unsafe extern "C" fn memcmp(left: *const c_void, right: *const c_void, len: usiz
 #[unsafe(no_mangle)]
 unsafe extern "C" fn strlen(value: *const i8) -> usize {
     let mut len = 0;
-    while unsafe { value.add(len).read() } != 0 {
-        len += 1;
-    }
+    while unsafe { value.add(len).read() } != 0 { len += 1; }
     len
 }

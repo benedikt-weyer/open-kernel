@@ -6,6 +6,7 @@ members = [
     "limine-adapter",
     "user-program",
     "std-program",
+    "openkernel-rt",
 ]
 resolver = "3"
 

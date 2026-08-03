@@ -80,8 +80,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "openkernel-rt"
+version = "0.1.0"
+
+[[package]]
 name = "openkernel-std-smoke"
 version = "0.1.0"
+dependencies = [
+ "openkernel-rt",
+]
 
 [[package]]
 name = "proc-macro2"
