@@ -10,12 +10,13 @@ PHDRS
 
 SECTIONS
 {
-  . = 0x0000400000000000;
+  . = 0x0000000040000000;
 
   .text : { *(.text*) } :text
   . = ALIGN(4K);
   .rodata : { *(.rodata*) } :rodata
   . = ALIGN(4K);
+  .lbss : { *(.lbss .lbss.*) } :data
   .data : { *(.data*) *(.bss*) *(.lbss*) *(.tdata*) *(.tbss*) *(COMMON) } :data
 
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }

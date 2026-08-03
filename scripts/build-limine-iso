@@ -44,6 +44,7 @@ cargo rustc --manifest-path "$ROOT_DIR/limine-adapter/Cargo.toml" --release \
     -C no-redzone=yes -C linker=ld -C link-arg=-melf_x86_64 \
     -C link-arg=-T"$ROOT_DIR/linker-limine.ld" -C link-arg=-nostdlib \
     -C link-arg=-z -C link-arg=max-page-size=0x1000
+cargo clean --manifest-path "$ROOT_DIR/user-program/Cargo.toml" -p user-program
 cargo rustc --manifest-path "$USER_MANIFEST" --release -- \
         -C relocation-model=static -C code-model=large -C linker=ld -C link-arg=-melf_x86_64 \
         -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib \
@@ -52,7 +53,7 @@ if [ "$OPENKERNEL_STD" = 1 ]; then
     (cd "$RUST_FORK" && BOOTSTRAP_SKIP_TARGET_SANITY=1 ./x build library/std --target x86_64-unknown-openkernel)
     cargo clean --manifest-path "$ROOT_DIR/std-program/Cargo.toml" -p openkernel-std-smoke
     RUSTC="$OPENKERNEL_RUSTC" cargo rustc --manifest-path "$ROOT_DIR/std-program/Cargo.toml" --release \
-        --target x86_64-unknown-openkernel -- -C relocation-model=static -C code-model=large -C linker=ld \
+        --target x86_64-unknown-openkernel -- -C relocation-model=static -C code-model=small -C linker=ld \
         -C link-arg=-melf_x86_64 -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib
 fi
 cp "$ROOT_DIR/target/release/limine-adapter" "$KERNEL"

@@ -14,7 +14,7 @@ pub const KERNEL_STACK_GUARD_PAGE: u64 = 0xFFFF_FF10_0000_0000;
 const KERNEL_STACK_PAGES: u64 = 4;
 const USER_STACK_PAGES: u64 = 4;
 const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
-pub const FUTURE_USER_SPACE_BASE: u64 = 0x0000_4000_0000_0000;
+pub const FUTURE_USER_SPACE_BASE: u64 = 0x0000_0000_4000_0000;
 
 #[derive(Clone, Copy)]
 pub struct PagingConfig {
