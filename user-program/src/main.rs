@@ -1,18 +1,88 @@
 #![no_std]
 #![no_main]
+// The writable .data/.bss ELF segment holds allocator state.
 
-use core::arch::asm;
+use core::{
+    alloc::{GlobalAlloc, Layout},
+    arch::asm,
+    sync::atomic::{AtomicBool, Ordering},
+};
 use core::panic::PanicInfo;
 
 static BANNER: [u8; 37] = *b"OPEN KERNEL USER CONSOLE\r\nTYPE HELP\r\n";
 static PROMPT: [u8; 2] = *b"> ";
-static HELP: &[u8] = b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS\r\n";
+static HELP: &[u8] = b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS HEAP\r\n";
 static UNKNOWN: [u8; 17] = *b"UNKNOWN COMMAND\r\n";
 static EXITING: [u8; 9] = *b"GOODBYE\r\n";
-const COMMANDS: [&[u8]; 10] = [
+const COMMANDS: [&[u8]; 11] = [
     b"help", b"clear", b"exit", b"shutdown", b"sata", b"identify", b"read", b"pci", b"lsblk",
     b"threads",
+    b"heap",
 ];
+
+struct BrkAllocator {
+    locked: AtomicBool,
+}
+
+impl BrkAllocator {
+    const fn new() -> Self {
+        Self {
+            locked: AtomicBool::new(false),
+        }
+    }
+
+    fn lock(&self) {
+        while self
+            .locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            core::hint::spin_loop();
+        }
+    }
+
+    fn unlock(&self) {
+        self.locked.store(false, Ordering::Release);
+    }
+}
+
+static mut HEAP_NEXT: usize = 0;
+
+unsafe impl GlobalAlloc for BrkAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        self.lock();
+        let heap_start = if unsafe { HEAP_NEXT } == 0 {
+            syscall1(18, 0) as usize
+        } else {
+            unsafe { HEAP_NEXT }
+        };
+        let aligned_start = match heap_start.checked_add(layout.align() - 1) {
+            Some(value) => value & !(layout.align() - 1),
+            None => {
+                self.unlock();
+                return core::ptr::null_mut();
+            }
+        };
+        let Some(new_break) = aligned_start.checked_add(layout.size().max(1)) else {
+            self.unlock();
+            return core::ptr::null_mut();
+        };
+        if syscall1(18, new_break as u64) == u64::MAX {
+            self.unlock();
+            return core::ptr::null_mut();
+        }
+        unsafe {
+            HEAP_NEXT = new_break;
+        }
+        self.unlock();
+        aligned_start as *mut u8
+    }
+
+    unsafe fn dealloc(&self, _: *mut u8, _: Layout) {}
+}
+
+#[global_allocator]
+static ALLOCATOR: BrkAllocator = BrkAllocator::new();
 
 #[unsafe(no_mangle)]
 extern "C" fn _start() -> ! {
@@ -53,6 +123,8 @@ extern "C" fn _start() -> ! {
                 syscall0(14);
             } else if equals(input, length, b"threads") {
                 user_thread_demo();
+            } else if equals(input, length, b"heap") {
+                heap_test();
             } else if length != 0 {
                 write(&UNKNOWN);
             }
@@ -87,6 +159,25 @@ extern "C" fn _start() -> ! {
             length += 1;
             write(core::slice::from_ref(&character));
         }
+    }
+}
+
+fn heap_test() {
+    let layout = Layout::from_size_align(8192, 64).unwrap();
+    let allocation = unsafe { ALLOCATOR.alloc(layout) };
+    if allocation.is_null() {
+        write(b"HEAP ALLOCATION FAILED\r\n");
+        return;
+    }
+    unsafe {
+        allocation.write(0xA5);
+        allocation.add(8191).write(0x5A);
+        if allocation.read() == 0xA5 && allocation.add(8191).read() == 0x5A {
+            write(b"HEAP OK\r\n");
+        } else {
+            write(b"HEAP CORRUPTED\r\n");
+        }
+        ALLOCATOR.dealloc(allocation, layout);
     }
 }
 

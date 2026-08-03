@@ -384,6 +384,7 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64) -> u64 {
         15 => syscall_thread_create(pointer, length),
         16 => crate::scheduler::exit_current_with_status(pointer),
         17 => crate::scheduler::join(pointer as usize).unwrap_or(u64::MAX),
+        18 => crate::user::brk(pointer),
         _ => u64::MAX,
     }
 }
