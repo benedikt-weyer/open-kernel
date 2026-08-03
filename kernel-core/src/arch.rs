@@ -120,7 +120,6 @@ struct FutexWaiter {
     deadline: Option<u64>,
 }
 static mut FUTEX_WAITERS: [Option<FutexWaiter>; MAX_FUTEX_WAITERS] = [None; MAX_FUTEX_WAITERS];
-static mut KEYBOARD_SCANCODE: u8 = 0;
 
 pub trait Architecture {
     fn initialize();
@@ -389,13 +388,13 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         }
         4 => syscall_spawn(),
         5 => syscall_sleep(pointer),
-        6 => crate::console::poll_user_key().map(u64::from).unwrap_or(0),
+        6 => crate::console::poll_user_key(crate::user::current_tty()).map(u64::from).unwrap_or(0),
         7 => {
-            crate::console::user_console_clear();
+            crate::console::user_console_clear(crate::user::current_tty());
             0
         }
         8 => {
-            crate::console::user_console_backspace();
+            crate::console::user_console_backspace(crate::user::current_tty());
             0
         }
         9 => crate::shutdown(),
@@ -430,6 +429,10 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         38 => syscall_poll_power_event(),
         39 => u64::from(crate::terminate_process(pointer as usize)),
         40 => syscall_reap_any_child(pointer),
+        41 => {
+            crate::user::bind_tty(pointer as usize);
+            0
+        }
         _ => u64::MAX,
     }
 }
@@ -666,7 +669,7 @@ fn syscall_write(pointer: u64, length: u64) -> u64 {
         return u64::MAX;
     };
     Com1.write(bytes);
-    crate::console::user_console_write(bytes);
+    crate::console::user_console_write(crate::user::current_tty(), bytes);
     length
 }
 
@@ -784,7 +787,7 @@ fn syscall_sata_read() -> u64 {
 
 fn console_output(bytes: &[u8]) {
     Com1.write(bytes);
-    crate::console::user_console_write(bytes);
+    crate::console::user_console_write(crate::user::current_tty(), bytes);
 }
 
 fn console_output_decimal(mut value: u64) {
@@ -856,17 +859,6 @@ fn wake_expired_futexes(ticks: u64) {
     }
 }
 
-pub fn take_keyboard_scancode() -> Option<u8> {
-    let scancode = unsafe { core::ptr::read_volatile(&raw const KEYBOARD_SCANCODE) };
-    if scancode == 0 {
-        return None;
-    }
-    unsafe {
-        core::ptr::write_volatile(&raw mut KEYBOARD_SCANCODE, 0);
-    }
-    Some(scancode)
-}
-
 pub fn shutdown() -> ! {
     unsafe { outw(0x604, 0x2000); }
     X86_64::halt()
@@ -885,7 +877,7 @@ extern "C" fn irq_dispatch(vector: u64) {
                 crate::console::user_console_tick();
             }
             33 => {
-                core::ptr::write_volatile(&raw mut KEYBOARD_SCANCODE, inb(0x60));
+                crate::console::handle_scancode(inb(0x60));
             }
             36 => {
                 if inb(0x3FD) & 1 != 0 {

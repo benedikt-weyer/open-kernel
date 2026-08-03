@@ -31,8 +31,20 @@ pub fn sleep_ms(milliseconds: u64) -> bool {
     syscall1(5, milliseconds) == 0
 }
 
-pub fn spawn_process(path: &str) -> Option<u64> {
-    let id = syscall3(33, path.as_ptr() as u64, path.len() as u64, 0);
+/// Spawns `path` with up to 4 arguments. Each argument is copied into a
+/// small NUL-terminated stack buffer, since the spawn syscall reads argv
+/// as an array of pointers to NUL-terminated strings.
+pub fn spawn_process(path: &str, argv: &[&str]) -> Option<u64> {
+    let mut buffers = [[0_u8; 32]; 4];
+    let mut pointers = [0_u64; 4];
+    for (index, argument) in argv.iter().take(4).enumerate() {
+        let bytes = argument.as_bytes();
+        let length = bytes.len().min(buffers[index].len() - 1);
+        buffers[index][..length].copy_from_slice(&bytes[..length]);
+        pointers[index] = buffers[index].as_ptr() as u64;
+    }
+    let argv_pointer = if argv.is_empty() { 0 } else { pointers.as_ptr() as u64 };
+    let id = syscall3(33, path.as_ptr() as u64, path.len() as u64, argv_pointer);
     (id != u64::MAX).then_some(id)
 }
 

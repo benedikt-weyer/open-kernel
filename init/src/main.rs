@@ -23,6 +23,7 @@ enum Restart {
 struct Service {
     name: &'static str,
     path: &'static str,
+    argv: &'static [&'static str],
     depends_on: &'static [&'static str],
     kind: Kind,
     restart: Restart,
@@ -36,6 +37,7 @@ const SERVICES: &[Service] = &[
     Service {
         name: "selftest",
         path: "/std-smoke",
+        argv: &[],
         depends_on: &[],
         kind: Kind::Oneshot,
         restart: Restart::OnFailure,
@@ -43,6 +45,15 @@ const SERVICES: &[Service] = &[
     Service {
         name: "console",
         path: "/console",
+        argv: &["0"],
+        depends_on: &["selftest"],
+        kind: Kind::Daemon,
+        restart: Restart::Always,
+    },
+    Service {
+        name: "console-tty2",
+        path: "/console",
+        argv: &["1"],
         depends_on: &["selftest"],
         kind: Kind::Daemon,
         restart: Restart::Always,
@@ -128,7 +139,7 @@ fn start_service(service: &'static Service, running: &mut HashMap<&'static str, 
 fn run_oneshot(service: &'static Service) {
     const MAX_ATTEMPTS: u32 = 3;
     for attempt in 1..=MAX_ATTEMPTS {
-        let Some(pid) = syscall::spawn_process(service.path) else {
+        let Some(pid) = syscall::spawn_process(service.path, service.argv) else {
             println!("init: failed to start {}", service.name);
             return;
         };
@@ -145,7 +156,7 @@ fn run_oneshot(service: &'static Service) {
 }
 
 fn start_daemon(service: &'static Service, running: &mut HashMap<&'static str, Running>) {
-    let Some(pid) = syscall::spawn_process(service.path) else {
+    let Some(pid) = syscall::spawn_process(service.path, service.argv) else {
         println!("init: failed to start {}", service.name);
         return;
     };

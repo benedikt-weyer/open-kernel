@@ -20,8 +20,10 @@ static SYNC_READY: AtomicU32 = AtomicU32::new(0);
 static TLS_WORD: u64 = 0x544C_535F_4F4B_0001;
 
 fn main() {
+    let tty = std::env::args().nth(1).and_then(|argument| argument.parse().ok()).unwrap_or(0);
+    syscall::bind_tty(tty);
     syscall::clear_screen();
-    eprint!("OPEN KERNEL USER CONSOLE\r\nTYPE HELP\r\n> ");
+    eprint!("OPEN KERNEL USER CONSOLE (TTY {tty})\r\nTYPE HELP\r\n> ");
 
     let mut input = String::new();
     loop {

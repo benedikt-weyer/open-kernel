@@ -718,16 +718,6 @@ pub fn request_preemption() {
     }
 }
 
-pub fn yield_if_preempted() {
-    let requested = unsafe { core::ptr::read_volatile(&raw const PREEMPT_REQUESTED) };
-    if requested {
-        unsafe {
-            core::ptr::write_volatile(&raw mut PREEMPT_REQUESTED, false);
-        }
-        yield_now();
-    }
-}
-
 #[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn ensure_idle() {
     if IDLE_CREATED {

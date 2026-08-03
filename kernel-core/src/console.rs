@@ -2,8 +2,6 @@ use core::ptr::write_volatile;
 
 use crate::{
     arch::{Architecture, X86_64},
-    drivers::Driver,
-    keyboard::Ps2KeyboardDriver,
     memory::{BitmapFrameAllocator, PhysicalFrameAllocator},
     serial::{Com1, SerialOutput},
 };
@@ -16,11 +14,52 @@ const USER_CONSOLE_MARGIN: usize = 32;
 const USER_CONSOLE_SCALE: usize = 2;
 const USER_CONSOLE_LINE_HEIGHT: usize = 16;
 const USER_CONSOLE_CHARACTER_WIDTH: usize = 12;
-static mut USER_FRAMEBUFFER: Option<Framebuffer> = None;
-static mut USER_CURSOR_X: usize = USER_CONSOLE_MARGIN;
-static mut USER_CURSOR_Y: usize = USER_CONSOLE_MARGIN;
-static mut USER_CURSOR_VISIBLE: bool = false;
-static mut USER_CURSOR_BLINK_TICKS: u8 = 0;
+
+/// Number of switchable virtual terminals. Each keeps its own off-screen
+/// framebuffer, cursor, and pending keypress; only the active one is ever
+/// blitted onto the real hardware framebuffer.
+pub const TTY_COUNT: usize = 3;
+const MAX_TTY_WIDTH: usize = 1024;
+const MAX_TTY_HEIGHT: usize = 768;
+const TTY_BUFFER_BYTES: usize = MAX_TTY_WIDTH * MAX_TTY_HEIGHT * 4;
+
+/// Scancodes for the modifier and function keys used by the Ctrl+Alt+Fn
+/// switch shortcut.
+const SCANCODE_CTRL_MAKE: u8 = 0x1D;
+const SCANCODE_CTRL_BREAK: u8 = 0x9D;
+const SCANCODE_ALT_MAKE: u8 = 0x38;
+const SCANCODE_ALT_BREAK: u8 = 0xB8;
+const SCANCODE_F1: u8 = 0x3B;
+
+struct TtyState {
+    cursor_x: usize,
+    cursor_y: usize,
+    cursor_visible: bool,
+    blink_ticks: u8,
+    pending_key: u8,
+}
+impl TtyState {
+    const EMPTY: Self = Self {
+        cursor_x: USER_CONSOLE_MARGIN,
+        cursor_y: USER_CONSOLE_MARGIN,
+        cursor_visible: false,
+        blink_ticks: 0,
+        pending_key: 0,
+    };
+}
+
+struct TtyStorage([[u8; TTY_BUFFER_BYTES]; TTY_COUNT]);
+
+static mut TTY_BUFFERS: TtyStorage = TtyStorage([const { [0; TTY_BUFFER_BYTES] }; TTY_COUNT]);
+static mut TTY_STATE: [TtyState; TTY_COUNT] = [TtyState::EMPTY; TTY_COUNT];
+static mut ACTIVE_TTY: usize = 0;
+static mut CTRL_HELD: bool = false;
+static mut ALT_HELD: bool = false;
+static mut PRIMARY_FRAMEBUFFER: Option<Framebuffer> = None;
+/// Off-screen per-tty buffers only fit resolutions up to
+/// `MAX_TTY_WIDTH`x`MAX_TTY_HEIGHT`; above that we fall back to tty 0
+/// drawing straight onto the real framebuffer, and other ttys are unusable.
+static mut MULTI_TTY_ENABLED: bool = false;
 
 pub enum Display {
     None,
@@ -92,14 +131,10 @@ pub fn boot(info: BootInfo) -> ! {
         Err(_) => Com1.write(b"open-kernel: SATA unavailable\r\n"),
     }
     crate::initialize_random();
-    // Nothing drains PS/2 aux data: `run_framebuffer_console` (the only
-    // caller of `poll_mouse`) is unreachable because `user::run_demo` ends
-    // in `scheduler::start()`, which diverges into the thread scheduler and
-    // never returns. Enabling the mouse without ever polling it wedges the
-    // shared PS/2 output register with an unread aux byte on first motion,
-    // which blocks all subsequent keyboard scancodes from reaching IRQ1.
-    let mut keyboard = Ps2KeyboardDriver::new();
-    let _ = keyboard.initialize();
+    // Nothing drains PS/2 aux data, so the mouse is never initialized here:
+    // enabling it without a poller would wedge the shared PS/2 output
+    // register with an unread aux byte on first motion, blocking all
+    // subsequent keyboard scancodes from reaching IRQ1.
 
     Com1.write(b"open-kernel: ");
     Com1.write(info.bootloader.as_bytes());
@@ -112,179 +147,280 @@ pub fn boot(info: BootInfo) -> ! {
     Com1.write(b"\r\n");
 
     if let Display::Framebuffer(framebuffer) = info.display {
+        Com1.write(b"open-kernel: framebuffer ");
+        Com1.write_usize(framebuffer.width);
+        Com1.write(b"x");
+        Com1.write_usize(framebuffer.height);
+        Com1.write(b"\r\n");
         enable_user_console(framebuffer);
+    } else if matches!(info.display, Display::VgaText) {
+        paint_vga(info.bootloader.as_bytes(), info.status);
     }
-    if matches!(info.status, BootStatus::Ready) {
-        if crate::user::run_demo().is_err() {
-            Com1.write(b"open-kernel: could not start user process\r\n");
-        }
-    }
-
-    match info.display {
-        Display::None => {}
-        Display::VgaText => paint_vga(info.bootloader.as_bytes(), info.status),
-        Display::Framebuffer(framebuffer) => {
-            Com1.write(b"open-kernel: framebuffer ");
-            Com1.write_usize(framebuffer.width);
-            Com1.write(b"x");
-            Com1.write_usize(framebuffer.height);
-            Com1.write(b"\r\n");
-            run_framebuffer_console(
-                framebuffer,
-                info.bootloader.as_bytes(),
-                info.status,
-                &keyboard,
-            )
-        }
+    if matches!(info.status, BootStatus::Ready) && crate::user::run_demo().is_err() {
+        Com1.write(b"open-kernel: could not start user process\r\n");
     }
 
     X86_64::halt()
 }
 
-pub fn user_console_write(text: &[u8]) {
-    let Some(framebuffer) = (unsafe { core::ptr::read_volatile(&raw const USER_FRAMEBUFFER) }) else {
+/// Renders `text` to `tty`'s virtual terminal, blitting to the real screen
+/// only if `tty` is currently the active one.
+pub fn user_console_write(tty: usize, text: &[u8]) {
+    let Some(target) = tty_target(tty) else {
         return;
     };
-    hide_user_cursor(&framebuffer);
+    hide_cursor(tty, &target);
     for byte in text {
         match *byte {
             b'\r' => {}
-            b'\n' => user_console_newline(&framebuffer),
+            b'\n' => newline(tty, &target),
             byte => {
-                let x = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_X) };
-                let y = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_Y) };
-                if x + USER_CONSOLE_CHARACTER_WIDTH > framebuffer.width {
-                    user_console_newline(&framebuffer);
+                if tty_state(tty).cursor_x + USER_CONSOLE_CHARACTER_WIDTH > target.width {
+                    newline(tty, &target);
                 }
-                let x = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_X) };
+                let state = tty_state(tty);
+                let (x, y) = (state.cursor_x, state.cursor_y);
                 draw_framebuffer_text(
-                    &framebuffer,
+                    &target,
                     core::slice::from_ref(&byte),
                     x,
                     y,
                     USER_CONSOLE_SCALE,
                     USER_CONSOLE_FOREGROUND,
                 );
-                unsafe {
-                    core::ptr::write_volatile(
-                        &raw mut USER_CURSOR_X,
-                        x + USER_CONSOLE_CHARACTER_WIDTH,
-                    );
-                }
+                tty_state(tty).cursor_x = x + USER_CONSOLE_CHARACTER_WIDTH;
             }
         }
     }
-    show_user_cursor(&framebuffer);
+    show_cursor(tty, &target);
+    blit_if_active(tty, &target);
 }
 
-pub fn user_console_clear() {
-    let Some(framebuffer) = (unsafe { core::ptr::read_volatile(&raw const USER_FRAMEBUFFER) }) else {
-        return;
-    };
-    hide_user_cursor(&framebuffer);
-    for row in 0..framebuffer.height {
-        for column in 0..framebuffer.width {
-            put_framebuffer_pixel(&framebuffer, column, row, USER_CONSOLE_BACKGROUND);
-        }
-    }
-    unsafe {
-        core::ptr::write_volatile(&raw mut USER_CURSOR_X, USER_CONSOLE_MARGIN);
-        core::ptr::write_volatile(&raw mut USER_CURSOR_Y, USER_CONSOLE_MARGIN);
-    }
-    show_user_cursor(&framebuffer);
+pub fn user_console_clear(tty: usize) {
+    clear_tty(tty);
 }
 
 pub fn user_console_tick() {
-    let Some(framebuffer) = (unsafe { core::ptr::read_volatile(&raw const USER_FRAMEBUFFER) }) else {
-        return;
-    };
-    unsafe {
-        USER_CURSOR_BLINK_TICKS = USER_CURSOR_BLINK_TICKS.wrapping_add(1);
-        if USER_CURSOR_BLINK_TICKS < 50 {
-            return;
+    for tty in 0..TTY_COUNT {
+        let Some(target) = tty_target(tty) else {
+            continue;
+        };
+        let state = tty_state(tty);
+        state.blink_ticks = state.blink_ticks.wrapping_add(1);
+        if state.blink_ticks < 50 {
+            continue;
         }
-        USER_CURSOR_BLINK_TICKS = 0;
-    }
-    if unsafe { USER_CURSOR_VISIBLE } {
-        hide_user_cursor(&framebuffer);
-    } else {
-        show_user_cursor(&framebuffer);
+        state.blink_ticks = 0;
+        if state.cursor_visible {
+            hide_cursor(tty, &target);
+        } else {
+            show_cursor(tty, &target);
+        }
+        blit_if_active(tty, &target);
     }
 }
 
-pub fn user_console_backspace() {
-    let Some(framebuffer) = (unsafe { core::ptr::read_volatile(&raw const USER_FRAMEBUFFER) }) else {
+pub fn user_console_backspace(tty: usize) {
+    let Some(target) = tty_target(tty) else {
         return;
     };
-    hide_user_cursor(&framebuffer);
-    let x = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_X) };
+    hide_cursor(tty, &target);
+    let x = tty_state(tty).cursor_x;
     if x <= USER_CONSOLE_MARGIN {
-        show_user_cursor(&framebuffer);
+        show_cursor(tty, &target);
         return;
     }
     let previous_x = x - USER_CONSOLE_CHARACTER_WIDTH;
-    let y = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_Y) };
+    let y = tty_state(tty).cursor_y;
     for pixel_y in 0..USER_CONSOLE_LINE_HEIGHT {
         for pixel_x in 0..USER_CONSOLE_CHARACTER_WIDTH {
-            put_framebuffer_pixel(
-                &framebuffer,
-                previous_x + pixel_x,
-                y + pixel_y,
-                USER_CONSOLE_BACKGROUND,
-            );
+            put_framebuffer_pixel(&target, previous_x + pixel_x, y + pixel_y, USER_CONSOLE_BACKGROUND);
         }
     }
-    unsafe {
-        core::ptr::write_volatile(&raw mut USER_CURSOR_X, previous_x);
+    tty_state(tty).cursor_x = previous_x;
+    show_cursor(tty, &target);
+    blit_if_active(tty, &target);
+}
+
+/// Reads one pending keypress for `tty`, if any. Only the active tty ever
+/// receives new keys from the keyboard IRQ, so background ttys read as
+/// empty until switched to.
+pub fn poll_user_key(tty: usize) -> Option<u8> {
+    if tty >= TTY_COUNT {
+        return None;
     }
-    show_user_cursor(&framebuffer);
+    let byte = {
+        let state = tty_state(tty);
+        let value = state.pending_key;
+        state.pending_key = 0;
+        value
+    };
+    if byte == 0 {
+        return None;
+    }
+    decode_scancode(byte)
 }
 
-pub fn poll_user_key() -> Option<u8> {
-    decode_scancode(crate::arch::take_keyboard_scancode()?)
-}
-
-fn show_user_cursor(framebuffer: &Framebuffer) {
-    let x = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_X) };
-    let y = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_Y) };
-    for pixel_y in USER_CONSOLE_LINE_HEIGHT - 2..USER_CONSOLE_LINE_HEIGHT {
-        for pixel_x in 0..USER_CONSOLE_CHARACTER_WIDTH {
-            put_framebuffer_pixel(framebuffer, x + pixel_x, y + pixel_y, USER_CONSOLE_FOREGROUND);
+/// Called from the keyboard IRQ handler for every scancode byte. Tracks
+/// Ctrl/Alt modifier state, switches the active tty on Ctrl+Alt+Fn, and
+/// otherwise queues the byte for whichever tty is currently active.
+pub fn handle_scancode(byte: u8) {
+    match byte {
+        SCANCODE_CTRL_MAKE => {
+            unsafe { CTRL_HELD = true };
+            return;
         }
+        SCANCODE_CTRL_BREAK => {
+            unsafe { CTRL_HELD = false };
+            return;
+        }
+        SCANCODE_ALT_MAKE => {
+            unsafe { ALT_HELD = true };
+            return;
+        }
+        SCANCODE_ALT_BREAK => {
+            unsafe { ALT_HELD = false };
+            return;
+        }
+        _ => {}
     }
-    unsafe { core::ptr::write_volatile(&raw mut USER_CURSOR_VISIBLE, true) };
-}
-
-fn hide_user_cursor(framebuffer: &Framebuffer) {
-    if !unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_VISIBLE) } {
+    let modifiers_held = unsafe { CTRL_HELD && ALT_HELD };
+    if modifiers_held && (SCANCODE_F1..SCANCODE_F1 + TTY_COUNT as u8).contains(&byte) {
+        switch_tty((byte - SCANCODE_F1) as usize);
         return;
     }
-    let x = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_X) };
-    let y = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_Y) };
-    for pixel_y in USER_CONSOLE_LINE_HEIGHT - 2..USER_CONSOLE_LINE_HEIGHT {
-        for pixel_x in 0..USER_CONSOLE_CHARACTER_WIDTH {
-            put_framebuffer_pixel(framebuffer, x + pixel_x, y + pixel_y, USER_CONSOLE_BACKGROUND);
-        }
+    // Only queue make codes; break codes carry no character and would just
+    // needlessly clobber a key the target tty hasn't consumed yet.
+    if byte & 0x80 == 0 {
+        let active = unsafe { ACTIVE_TTY };
+        tty_state(active).pending_key = byte;
     }
-    unsafe { core::ptr::write_volatile(&raw mut USER_CURSOR_VISIBLE, false) };
+}
+
+fn switch_tty(tty: usize) {
+    if tty >= TTY_COUNT {
+        return;
+    }
+    unsafe { ACTIVE_TTY = tty };
+    if let Some(target) = tty_target(tty) {
+        blit_to_primary(&target);
+    }
 }
 
 fn enable_user_console(framebuffer: Framebuffer) {
     unsafe {
-        core::ptr::write_volatile(&raw mut USER_FRAMEBUFFER, Some(framebuffer));
+        write_volatile(&raw mut PRIMARY_FRAMEBUFFER, Some(framebuffer));
+        MULTI_TTY_ENABLED = framebuffer.bits_per_pixel == 32
+            && framebuffer.width <= MAX_TTY_WIDTH
+            && framebuffer.height <= MAX_TTY_HEIGHT;
     }
-    user_console_clear();
+    for tty in 0..TTY_COUNT {
+        clear_tty(tty);
+    }
 }
 
-fn user_console_newline(framebuffer: &Framebuffer) {
-    let next_y = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_Y) + USER_CONSOLE_LINE_HEIGHT };
-    if next_y + USER_CONSOLE_LINE_HEIGHT > framebuffer.height {
-        user_console_clear();
+fn clear_tty(tty: usize) {
+    let Some(target) = tty_target(tty) else {
+        return;
+    };
+    for row in 0..target.height {
+        for column in 0..target.width {
+            put_framebuffer_pixel(&target, column, row, USER_CONSOLE_BACKGROUND);
+        }
+    }
+    let state = tty_state(tty);
+    state.cursor_x = USER_CONSOLE_MARGIN;
+    state.cursor_y = USER_CONSOLE_MARGIN;
+    state.cursor_visible = false;
+    show_cursor(tty, &target);
+    blit_if_active(tty, &target);
+}
+
+fn newline(tty: usize, target: &Framebuffer) {
+    let next_y = tty_state(tty).cursor_y + USER_CONSOLE_LINE_HEIGHT;
+    if next_y + USER_CONSOLE_LINE_HEIGHT > target.height {
+        clear_tty(tty);
         return;
     }
-    unsafe {
-        core::ptr::write_volatile(&raw mut USER_CURSOR_X, USER_CONSOLE_MARGIN);
-        core::ptr::write_volatile(&raw mut USER_CURSOR_Y, next_y);
+    let state = tty_state(tty);
+    state.cursor_x = USER_CONSOLE_MARGIN;
+    state.cursor_y = next_y;
+}
+
+fn show_cursor(tty: usize, target: &Framebuffer) {
+    let state = tty_state(tty);
+    let (x, y) = (state.cursor_x, state.cursor_y);
+    for pixel_y in USER_CONSOLE_LINE_HEIGHT - 2..USER_CONSOLE_LINE_HEIGHT {
+        for pixel_x in 0..USER_CONSOLE_CHARACTER_WIDTH {
+            put_framebuffer_pixel(target, x + pixel_x, y + pixel_y, USER_CONSOLE_FOREGROUND);
+        }
+    }
+    tty_state(tty).cursor_visible = true;
+}
+
+fn hide_cursor(tty: usize, target: &Framebuffer) {
+    let state = tty_state(tty);
+    if !state.cursor_visible {
+        return;
+    }
+    let (x, y) = (state.cursor_x, state.cursor_y);
+    for pixel_y in USER_CONSOLE_LINE_HEIGHT - 2..USER_CONSOLE_LINE_HEIGHT {
+        for pixel_x in 0..USER_CONSOLE_CHARACTER_WIDTH {
+            put_framebuffer_pixel(target, x + pixel_x, y + pixel_y, USER_CONSOLE_BACKGROUND);
+        }
+    }
+    tty_state(tty).cursor_visible = false;
+}
+
+/// The framebuffer a tty should draw into: its own off-screen buffer when
+/// multi-tty is enabled, or (for tty 0 only) the real framebuffer directly
+/// when the resolution was too large to back every tty with its own copy.
+fn tty_target(tty: usize) -> Option<Framebuffer> {
+    if tty >= TTY_COUNT {
+        return None;
+    }
+    let primary = unsafe { core::ptr::read_volatile(&raw const PRIMARY_FRAMEBUFFER) }?;
+    if unsafe { MULTI_TTY_ENABLED } {
+        let pitch = primary.width * 4;
+        Some(Framebuffer::new(tty_buffer_ptr(tty), primary.width, primary.height, pitch, primary.bits_per_pixel))
+    } else if tty == 0 {
+        Some(primary)
+    } else {
+        None
+    }
+}
+
+fn tty_buffer_ptr(tty: usize) -> *mut u8 {
+    unsafe { (&raw mut (*(&raw mut TTY_BUFFERS)).0[tty]).cast::<u8>() }
+}
+
+#[allow(clippy::mut_from_ref)]
+fn tty_state(tty: usize) -> &'static mut TtyState {
+    unsafe { &mut (*(&raw mut TTY_STATE))[tty] }
+}
+
+fn blit_if_active(tty: usize, target: &Framebuffer) {
+    if !unsafe { MULTI_TTY_ENABLED } || tty != unsafe { ACTIVE_TTY } {
+        return;
+    }
+    blit_to_primary(target);
+}
+
+fn blit_to_primary(source: &Framebuffer) {
+    let Some(primary) = (unsafe { core::ptr::read_volatile(&raw const PRIMARY_FRAMEBUFFER) }) else {
+        return;
+    };
+    // A manual pixel loop rather than `core::ptr::copy_nonoverlapping`,
+    // since this freestanding, `-nostdlib` binary has no `memcpy` to lower
+    // a runtime-sized copy into.
+    for row in 0..source.height {
+        let source_row = unsafe { source.address.add(row * source.pitch).cast::<u32>() };
+        let primary_row = unsafe { primary.address.add(row * primary.pitch).cast::<u32>() };
+        for column in 0..source.width {
+            unsafe {
+                write_volatile(primary_row.add(column), core::ptr::read_volatile(source_row.add(column)));
+            }
+        }
     }
 }
 
@@ -312,312 +448,6 @@ fn write_vga_text(text: &[u8], row: usize) {
             );
         }
     }
-}
-
-fn run_framebuffer_console(
-    framebuffer: Framebuffer,
-    bootloader: &[u8],
-    status: BootStatus,
-    keyboard: &Ps2KeyboardDriver,
-) -> ! {
-    let mut input = [0_u8; 64];
-    let mut input_length = 0;
-    let mut response = [0_u8; 80];
-    let mut response_length = copy_text(&mut response, b"TYPE HELP");
-    let mut completion_prefix = [0_u8; 64];
-    let mut completion_length = 0;
-    let mut completion_index = 0;
-    let mut completion_active = false;
-
-    render_framebuffer_console(
-        &framebuffer,
-        bootloader,
-        status,
-        &input[..input_length],
-        &response[..response_length],
-    );
-    let mut mouse_cursor = MouseCursor::new();
-    mouse_cursor.draw(&framebuffer);
-
-    loop {
-        let mut redraw = false;
-        let mouse_moved = crate::poll_mouse();
-        crate::scheduler::yield_if_preempted();
-
-        match read_key(&keyboard) {
-            Some(b'\n') => {
-                response_length = run_console_command(
-                    &input[..input_length],
-                    &mut response,
-                    bootloader,
-                    framebuffer.width,
-                    framebuffer.height,
-                );
-                input_length = 0;
-                completion_active = false;
-                redraw = true;
-            }
-            Some(8) if input_length > 0 => {
-                input_length -= 1;
-                completion_active = false;
-                redraw = true;
-            }
-            Some(8) => {}
-            Some(b'\t') => {
-                if !completion_active {
-                    for index in 0..input_length {
-                        unsafe {
-                            core::ptr::write_volatile(
-                                completion_prefix.as_mut_ptr().add(index),
-                                core::ptr::read_volatile(input.as_ptr().add(index)),
-                            );
-                        }
-                    }
-                    completion_length = input_length;
-                    completion_index = 0;
-                    completion_active = true;
-                } else {
-                    completion_index += 1;
-                }
-                if complete_command(
-                    &mut input,
-                    &mut input_length,
-                    &completion_prefix[..completion_length],
-                    completion_index,
-                    &mut response,
-                    &mut response_length,
-                ) {
-                    redraw = true;
-                }
-            }
-            Some(character) if input_length < input.len() => {
-                input[input_length] = character;
-                input_length += 1;
-                completion_active = false;
-                redraw = true;
-            }
-            _ => {}
-        }
-
-        if redraw {
-            mouse_cursor.restore(&framebuffer);
-            render_framebuffer_console(
-                &framebuffer,
-                bootloader,
-                status,
-                &input[..input_length],
-                &response[..response_length],
-            );
-            mouse_cursor.draw(&framebuffer);
-        } else if mouse_moved {
-            mouse_cursor.restore(&framebuffer);
-            mouse_cursor.draw(&framebuffer);
-        }
-    }
-}
-
-fn complete_command(
-    input: &mut [u8; 64],
-    input_length: &mut usize,
-    prefix: &[u8],
-    completion_index: usize,
-    response: &mut [u8; 80],
-    response_length: &mut usize,
-) -> bool {
-    const COMMANDS: [&[u8]; 6] = [b"help", b"clear", b"resolution", b"bootloader", b"halt", b"shutdown"];
-    let mut match_command = None;
-
-    for command in COMMANDS {
-        if command_has_prefix(command, prefix) {
-            if match_command.is_none() {
-                match_command = Some(command);
-            }
-        }
-    }
-
-    let matching_count = COMMANDS
-        .iter()
-        .filter(|command| command_has_prefix(command, prefix))
-        .count();
-    if matching_count > 1 {
-        let mut length = 0;
-        for command in COMMANDS {
-            if !command_has_prefix(command, prefix) {
-                continue;
-            }
-            if length != 0 && length < response.len() {
-                response[length] = b' ';
-                length += 1;
-            }
-            for byte in command {
-                if length == response.len() {
-                    break;
-                }
-                response[length] = *byte;
-                length += 1;
-            }
-        }
-        *response_length = length;
-        let selected = completion_index % matching_count;
-        let mut seen = 0;
-        for command in COMMANDS {
-            if command_has_prefix(command, prefix) {
-                if seen == selected {
-                    for (index, byte) in command.iter().enumerate() {
-                        unsafe {
-                            core::ptr::write_volatile(input.as_mut_ptr().add(index), *byte);
-                        }
-                    }
-                    *input_length = command.len();
-                    break;
-                }
-                seen += 1;
-            }
-        }
-        return true;
-    }
-
-    let Some(command) = match_command else {
-        return false;
-    };
-    if command.len() > input.len() || command_has_prefix(prefix, command) {
-        return false;
-    }
-    for (index, byte) in command.iter().enumerate() {
-        unsafe {
-            core::ptr::write_volatile(input.as_mut_ptr().add(index), *byte);
-        }
-    }
-    *input_length = command.len();
-    true
-}
-
-fn command_has_prefix(command: &[u8], prefix: &[u8]) -> bool {
-    if prefix.len() > command.len() {
-        return false;
-    }
-    for index in 0..prefix.len() {
-        let command_byte = unsafe { core::ptr::read_volatile(command.as_ptr().add(index)) };
-        let prefix_byte = unsafe { core::ptr::read_volatile(prefix.as_ptr().add(index)) };
-        if command_byte != prefix_byte {
-            return false;
-        }
-    }
-    true
-}
-
-fn render_framebuffer_console(
-    framebuffer: &Framebuffer,
-    bootloader: &[u8],
-    status: BootStatus,
-    input: &[u8],
-    response: &[u8],
-) {
-    if framebuffer.bits_per_pixel != 32 {
-        return;
-    }
-
-    let background = match status {
-        BootStatus::Ready => 0x0016_2D3D,
-        BootStatus::InvalidBootInfo => 0x0040_1818,
-    };
-
-    for row in 0..framebuffer.height {
-        let row_start = unsafe {
-            framebuffer
-                .address
-                .add(row * framebuffer.pitch)
-                .cast::<u32>()
-        };
-
-        for column in 0..framebuffer.width {
-            unsafe {
-                write_volatile(row_start.add(column), background);
-            }
-        }
-    }
-
-    draw_framebuffer_text(framebuffer, b"OPEN KERNEL", 32, 32, 3, 0x00FF_FFFF);
-    draw_framebuffer_text(framebuffer, bootloader, 32, 64, 2, 0x00B8_E8FF);
-
-    let status_text = match status {
-        BootStatus::Ready => b"READY".as_slice(),
-        BootStatus::InvalidBootInfo => b"INVALID BOOT INFO".as_slice(),
-    };
-    draw_framebuffer_text(framebuffer, status_text, 32, 96, 2, 0x00FF_FFFF);
-    draw_framebuffer_text(framebuffer, response, 32, 144, 2, 0x00FF_FFFF);
-    draw_framebuffer_text(framebuffer, b"> ", 32, 176, 2, 0x00B8_E8FF);
-    draw_framebuffer_text(framebuffer, input, 56, 176, 2, 0x00FF_FFFF);
-}
-
-fn run_console_command(
-    input: &[u8],
-    response: &mut [u8; 80],
-    bootloader: &[u8],
-    width: usize,
-    height: usize,
-) -> usize {
-    match input {
-        b"" => 0,
-        b"help" => copy_text(response, b"HELP CLEAR RESOLUTION BOOTLOADER HALT SHUTDOWN"),
-        b"clear" => 0,
-        b"resolution" => {
-            let mut length = copy_text(response, b"RESOLUTION ");
-            length = append_usize(response, length, width);
-            response[length] = b'X';
-            length += 1;
-            append_usize(response, length, height)
-        }
-        b"bootloader" => {
-            let mut length = copy_text(response, b"BOOTLOADER ");
-            for byte in bootloader.iter().copied().take(response.len() - length) {
-                response[length] = byte;
-                length += 1;
-            }
-            length
-        }
-        b"halt" => X86_64::halt(),
-        b"shutdown" => crate::shutdown(),
-        _ => copy_text(response, b"UNKNOWN COMMAND"),
-    }
-}
-
-fn copy_text(target: &mut [u8], source: &[u8]) -> usize {
-    let length = source.len().min(target.len());
-    target[..length].copy_from_slice(&source[..length]);
-    length
-}
-
-fn append_usize(target: &mut [u8], start: usize, mut value: usize) -> usize {
-    let mut digits = [0_u8; 20];
-    let mut length = 0;
-
-    if value == 0 {
-        if start < target.len() {
-            target[start] = b'0';
-            return start + 1;
-        }
-        return start;
-    }
-
-    while value != 0 && length < digits.len() {
-        digits[length] = b'0' + (value % 10) as u8;
-        length += 1;
-        value /= 10;
-    }
-
-    let mut output = start;
-    while length != 0 && output < target.len() {
-        length -= 1;
-        target[output] = digits[length];
-        output += 1;
-    }
-    output
-}
-
-fn read_key(keyboard: &Ps2KeyboardDriver) -> Option<u8> {
-    let scancode = keyboard.read_scancode()?;
-    decode_scancode(scancode)
 }
 
 fn decode_scancode(scancode: u8) -> Option<u8> {
@@ -690,83 +520,6 @@ fn draw_framebuffer_text(
             }
         }
         cursor += 6 * scale;
-    }
-}
-
-struct MouseCursor {
-    x: usize,
-    y: usize,
-    pixels: [u32; 19],
-    visible: bool,
-}
-
-impl MouseCursor {
-    const fn new() -> Self {
-        Self {
-            x: 0,
-            y: 0,
-            pixels: [0; 19],
-            visible: false,
-        }
-    }
-
-    fn draw(&mut self, framebuffer: &Framebuffer) {
-        if framebuffer.bits_per_pixel != 32 || framebuffer.width == 0 || framebuffer.height == 0 {
-            return;
-        }
-
-        let (mouse_x, mouse_y) = crate::mouse_position();
-        self.x = mouse_x.min(framebuffer.width - 1);
-        self.y = mouse_y.min(framebuffer.height - 1);
-        let mut index = 0;
-        for offset in 0..10 {
-            self.save_and_paint(framebuffer, self.x + offset, self.y, index);
-            if framebuffer_pixel(framebuffer, self.x + offset, self.y).is_some() {
-                index += 1;
-            }
-        }
-        for offset in 1..10 {
-            self.save_and_paint(framebuffer, self.x, self.y + offset, index);
-            if framebuffer_pixel(framebuffer, self.x, self.y + offset).is_some() {
-                index += 1;
-            }
-        }
-        self.visible = true;
-    }
-
-    fn restore(&mut self, framebuffer: &Framebuffer) {
-        if !self.visible {
-            return;
-        }
-
-        let mut index = 0;
-        for offset in 0..10 {
-            if let Some(pixel) = framebuffer_pixel(framebuffer, self.x + offset, self.y) {
-                unsafe {
-                    write_volatile(pixel, self.pixels[index]);
-                }
-                index += 1;
-            }
-        }
-        for offset in 1..10 {
-            if let Some(pixel) = framebuffer_pixel(framebuffer, self.x, self.y + offset) {
-                unsafe {
-                    write_volatile(pixel, self.pixels[index]);
-                }
-                index += 1;
-            }
-        }
-        self.visible = false;
-    }
-
-    fn save_and_paint(&mut self, framebuffer: &Framebuffer, x: usize, y: usize, index: usize) {
-        let Some(pixel) = framebuffer_pixel(framebuffer, x, y) else {
-            return;
-        };
-        unsafe {
-            self.pixels[index] = core::ptr::read_volatile(pixel);
-            write_volatile(pixel, 0x00FF_FFFF);
-        }
     }
 }
 

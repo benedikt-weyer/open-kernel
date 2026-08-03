@@ -13,6 +13,12 @@ pub fn clear_screen() {
     syscall0(7);
 }
 
+/// Binds this process's console I/O (write/clear/backspace/poll-key) to
+/// virtual terminal `tty`, switchable with Ctrl+Alt+F1, F2, ...
+pub fn bind_tty(tty: u64) {
+    syscall1(41, tty);
+}
+
 pub fn erase_char() {
     syscall0(8);
 }

@@ -4,7 +4,6 @@ mod arch;
 mod console;
 mod drivers;
 mod elf;
-mod keyboard;
 mod memory;
 mod mouse;
 mod pci;
@@ -30,7 +29,6 @@ pub use drivers::{
     BlockDevice, BlockDeviceError, Driver, DriverError, LoopbackNetworkDriver, NetworkDriver,
 };
 pub use elf::{ElfError, LoadedImage, TlsImage, load_user_elf, load_user_elf_into};
-pub use keyboard::Ps2KeyboardDriver;
 pub use memory::{
     MemoryRegion, MemoryRegionKind, PAGE_SIZE, PhysicalFrameAllocator, PhysicalMemoryRange,
     PhysicalMemoryStats, allocate_physical_frame, free_physical_frame, initialize_physical_memory,
