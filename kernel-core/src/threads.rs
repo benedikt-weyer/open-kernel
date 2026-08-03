@@ -276,7 +276,14 @@ pub fn wait_process(process: ProcessId) -> Option<u64> {
             .find(|record| record.id == process && record.parent == Some(current_process))
             .and_then(|record| record.main_thread)?
     };
-    join(main_thread)
+    let status = join(main_thread)?;
+    unsafe {
+        if let Some(record) = (*(&raw mut PROCESSES)).iter_mut().find(|record| record.id == process) {
+            crate::destroy_user_address_space(record.address_space);
+            *record = Process::EMPTY;
+        }
+    }
+    Some(status)
 }
 
 pub fn process_address_space(id: ProcessId) -> Option<u64> {

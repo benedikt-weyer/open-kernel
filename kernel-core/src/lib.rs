@@ -42,6 +42,7 @@ pub use random::{RandomError, fill as fill_random, initialize as initialize_rand
 pub use paging::{
     DEVICE_WINDOW_BASE, FUTURE_USER_SPACE_BASE, KERNEL_STACK_GUARD_PAGE, PageFlags, PagingConfig,
     PagingError, active_address_space, allocate_kernel_stack, allocate_user_stack, allocate_user_stack_in, create_user_address_space,
+    destroy_user_address_space,
     initialize_virtual_memory, map_user_code_page, map_user_page, map_user_page_in,
     is_user_executable, is_user_mapped, map_device_page, map_user_page_with_flags, physical_to_virtual, release_kernel_stack,
     release_user_stack, write_physical_frame,

@@ -134,6 +134,22 @@ pub unsafe fn switch_address_space(address_space: u64) {
     }
 }
 
+/// Releases all lower-half user mappings and page-table frames owned by an
+/// address space. Kernel-half entries are shared and deliberately untouched.
+pub fn destroy_user_address_space(address_space: u64) {
+    unsafe {
+        let root = table_mut(address_space & ENTRY_ADDRESS_MASK);
+        for index in 0..256 {
+            let entry = root.0[index];
+            if entry & PRESENT != 0 {
+                release_user_table(entry & ENTRY_ADDRESS_MASK, 3);
+                root.0[index] = 0;
+            }
+        }
+    }
+    free_physical_frame(address_space & ENTRY_ADDRESS_MASK);
+}
+
 pub fn map_user_page_in(
     address_space: u64,
     virtual_address: u64,
@@ -372,6 +388,24 @@ fn zero_table(physical_address: u64) {
             core::ptr::write_volatile(entry, 0);
         }
     }
+}
+
+unsafe fn release_user_table(frame: u64, level: usize) {
+    let table = unsafe { table_mut(frame) };
+    for index in 0..512 {
+        let entry = table.0[index];
+        if entry & PRESENT == 0 {
+            continue;
+        }
+        let child = entry & ENTRY_ADDRESS_MASK;
+        if level == 1 || entry & HUGE_PAGE != 0 {
+            free_physical_frame(child);
+        } else {
+            unsafe { release_user_table(child, level - 1) };
+        }
+        table.0[index] = 0;
+    }
+    free_physical_frame(frame);
 }
 fn read_cr3() -> u64 {
     let value: u64;
