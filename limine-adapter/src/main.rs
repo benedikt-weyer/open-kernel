@@ -22,7 +22,8 @@ static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
-static ENTRY_POINT_REQUEST: EntryPointRequest = EntryPointRequest::new().with_entry_point(limine_entry);
+static ENTRY_POINT_REQUEST: EntryPointRequest =
+    EntryPointRequest::new().with_entry_point(limine_entry);
 
 #[used]
 #[unsafe(link_section = ".limine_requests_end")]

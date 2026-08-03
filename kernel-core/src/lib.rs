@@ -38,6 +38,7 @@ impl Framebuffer {
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum BootStatus {
     Ready,
     InvalidBootInfo,
@@ -73,7 +74,7 @@ pub fn boot(info: BootInfo) -> ! {
             serial_write(b"x");
             serial_write_usize(framebuffer.height);
             serial_write(b"\r\n");
-            paint_framebuffer(framebuffer, info.bootloader.as_bytes(), info.status)
+            run_framebuffer_console(framebuffer, info.bootloader.as_bytes(), info.status)
         }
     }
 
@@ -114,7 +115,66 @@ fn write_vga_text(text: &[u8], row: usize) {
     }
 }
 
-fn paint_framebuffer(framebuffer: Framebuffer, bootloader: &[u8], status: BootStatus) {
+fn run_framebuffer_console(framebuffer: Framebuffer, bootloader: &[u8], status: BootStatus) -> ! {
+    let mut input = [0_u8; 64];
+    let mut input_length = 0;
+    let mut response = [0_u8; 80];
+    let mut response_length = copy_text(&mut response, b"TYPE HELP");
+
+    render_framebuffer_console(
+        &framebuffer,
+        bootloader,
+        status,
+        &input[..input_length],
+        &response[..response_length],
+    );
+
+    loop {
+        let mut redraw = false;
+
+        match read_key() {
+            Some(b'\n') => {
+                response_length = run_console_command(
+                    &input[..input_length],
+                    &mut response,
+                    bootloader,
+                    framebuffer.width,
+                    framebuffer.height,
+                );
+                input_length = 0;
+                redraw = true;
+            }
+            Some(8) if input_length > 0 => {
+                input_length -= 1;
+                redraw = true;
+            }
+            Some(character) if input_length < input.len() => {
+                input[input_length] = character;
+                input_length += 1;
+                redraw = true;
+            }
+            _ => {}
+        }
+
+        if redraw {
+            render_framebuffer_console(
+                &framebuffer,
+                bootloader,
+                status,
+                &input[..input_length],
+                &response[..response_length],
+            );
+        }
+    }
+}
+
+fn render_framebuffer_console(
+    framebuffer: &Framebuffer,
+    bootloader: &[u8],
+    status: BootStatus,
+    input: &[u8],
+    response: &[u8],
+) {
     if framebuffer.bits_per_pixel != 32 {
         return;
     }
@@ -125,7 +185,12 @@ fn paint_framebuffer(framebuffer: Framebuffer, bootloader: &[u8], status: BootSt
     };
 
     for row in 0..framebuffer.height {
-        let row_start = unsafe { framebuffer.address.add(row * framebuffer.pitch).cast::<u32>() };
+        let row_start = unsafe {
+            framebuffer
+                .address
+                .add(row * framebuffer.pitch)
+                .cast::<u32>()
+        };
 
         for column in 0..framebuffer.width {
             unsafe {
@@ -134,14 +199,133 @@ fn paint_framebuffer(framebuffer: Framebuffer, bootloader: &[u8], status: BootSt
         }
     }
 
-    draw_framebuffer_text(&framebuffer, b"OPEN KERNEL", 32, 32, 3, 0x00FF_FFFF);
-    draw_framebuffer_text(&framebuffer, bootloader, 32, 64, 2, 0x00B8_E8FF);
+    draw_framebuffer_text(framebuffer, b"OPEN KERNEL", 32, 32, 3, 0x00FF_FFFF);
+    draw_framebuffer_text(framebuffer, bootloader, 32, 64, 2, 0x00B8_E8FF);
 
     let status_text = match status {
         BootStatus::Ready => b"READY".as_slice(),
         BootStatus::InvalidBootInfo => b"INVALID BOOT INFO".as_slice(),
     };
-    draw_framebuffer_text(&framebuffer, status_text, 32, 96, 2, 0x00FF_FFFF);
+    draw_framebuffer_text(framebuffer, status_text, 32, 96, 2, 0x00FF_FFFF);
+    draw_framebuffer_text(framebuffer, response, 32, 144, 2, 0x00FF_FFFF);
+    draw_framebuffer_text(framebuffer, b"> ", 32, 176, 2, 0x00B8_E8FF);
+    draw_framebuffer_text(framebuffer, input, 56, 176, 2, 0x00FF_FFFF);
+}
+
+fn run_console_command(
+    input: &[u8],
+    response: &mut [u8; 80],
+    bootloader: &[u8],
+    width: usize,
+    height: usize,
+) -> usize {
+    match input {
+        b"" => 0,
+        b"help" => copy_text(response, b"HELP CLEAR RESOLUTION BOOTLOADER HALT"),
+        b"clear" => 0,
+        b"resolution" => {
+            let mut length = copy_text(response, b"RESOLUTION ");
+            length = append_usize(response, length, width);
+            response[length] = b'X';
+            length += 1;
+            append_usize(response, length, height)
+        }
+        b"bootloader" => {
+            let mut length = copy_text(response, b"BOOTLOADER ");
+            for byte in bootloader.iter().copied().take(response.len() - length) {
+                response[length] = byte;
+                length += 1;
+            }
+            length
+        }
+        b"halt" => halt(),
+        _ => copy_text(response, b"UNKNOWN COMMAND"),
+    }
+}
+
+fn copy_text(target: &mut [u8], source: &[u8]) -> usize {
+    let length = source.len().min(target.len());
+    target[..length].copy_from_slice(&source[..length]);
+    length
+}
+
+fn append_usize(target: &mut [u8], start: usize, mut value: usize) -> usize {
+    let mut digits = [0_u8; 20];
+    let mut length = 0;
+
+    if value == 0 {
+        if start < target.len() {
+            target[start] = b'0';
+            return start + 1;
+        }
+        return start;
+    }
+
+    while value != 0 && length < digits.len() {
+        digits[length] = b'0' + (value % 10) as u8;
+        length += 1;
+        value /= 10;
+    }
+
+    let mut output = start;
+    while length != 0 && output < target.len() {
+        length -= 1;
+        target[output] = digits[length];
+        output += 1;
+    }
+    output
+}
+
+fn read_key() -> Option<u8> {
+    let status: u8;
+    unsafe {
+        asm!("in al, dx", in("dx") 0x64_u16, out("al") status, options(nomem, nostack));
+    }
+    if status & 1 == 0 {
+        return None;
+    }
+
+    let scancode: u8;
+    unsafe {
+        asm!("in al, dx", in("dx") 0x60_u16, out("al") scancode, options(nomem, nostack));
+    }
+    if scancode & 0x80 != 0 {
+        return None;
+    }
+
+    match scancode {
+        0x02..=0x0B => Some(b'1' + scancode - 0x02),
+        0x0E => Some(8),
+        0x10 => Some(b'q'),
+        0x11 => Some(b'w'),
+        0x12 => Some(b'e'),
+        0x13 => Some(b'r'),
+        0x14 => Some(b't'),
+        0x15 => Some(b'y'),
+        0x16 => Some(b'u'),
+        0x17 => Some(b'i'),
+        0x18 => Some(b'o'),
+        0x19 => Some(b'p'),
+        0x1C => Some(b'\n'),
+        0x1E => Some(b'a'),
+        0x1F => Some(b's'),
+        0x20 => Some(b'd'),
+        0x21 => Some(b'f'),
+        0x22 => Some(b'g'),
+        0x23 => Some(b'h'),
+        0x24 => Some(b'j'),
+        0x25 => Some(b'k'),
+        0x26 => Some(b'l'),
+        0x2C => Some(b'z'),
+        0x2D => Some(b'x'),
+        0x2E => Some(b'c'),
+        0x2F => Some(b'v'),
+        0x30 => Some(b'b'),
+        0x31 => Some(b'n'),
+        0x32 => Some(b'm'),
+        0x39 => Some(b' '),
+        _ => None,
+    }
 }
 
 fn draw_framebuffer_text(
@@ -220,6 +404,17 @@ fn framebuffer_glyph(character: u8) -> [u8; 7] {
         b'X' => [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
         b'Y' => [0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04],
         b'Z' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F],
+        b'0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
+        b'1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
+        b'2' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
+        b'3' => [0x1E, 0x01, 0x01, 0x0E, 0x01, 0x01, 0x1E],
+        b'4' => [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
+        b'5' => [0x1F, 0x10, 0x10, 0x1E, 0x01, 0x01, 0x1E],
+        b'6' => [0x0E, 0x10, 0x10, 0x1E, 0x11, 0x11, 0x0E],
+        b'7' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+        b'8' => [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
+        b'9' => [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x01, 0x0E],
+        b'>' => [0x10, 0x08, 0x04, 0x02, 0x04, 0x08, 0x10],
         b' ' => [0; 7],
         _ => [0x1F, 0x01, 0x02, 0x04, 0x04, 0x00, 0x04],
     }
