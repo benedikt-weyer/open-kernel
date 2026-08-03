@@ -37,13 +37,20 @@ pub fn position() -> (usize, usize) {
     unsafe { (X as usize, Y as usize) }
 }
 unsafe fn mouse_command(command: u8) {
-    unsafe { outb(0x64, 0xD4); outb(0x60, command); }
+    unsafe {
+        outb(0x64, 0xD4);
+        outb(0x60, command);
+    }
 }
 unsafe fn inb(port: u16) -> u8 {
     let value: u8;
-    unsafe { asm!("in al, dx", in("dx") port, out("al") value, options(nomem, nostack)); }
+    unsafe {
+        asm!("in al, dx", in("dx") port, out("al") value, options(nomem, nostack));
+    }
     value
 }
 unsafe fn outb(port: u16, value: u8) {
-    unsafe { asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack)); }
+    unsafe {
+        asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack));
+    }
 }
