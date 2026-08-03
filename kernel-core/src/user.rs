@@ -466,10 +466,14 @@ fn initialize_process_stack(stack_pointer: u64, program_name: &[u8], argv: &[&[u
     let path = b"PATH=/bin\0";
     let pwd = b"PWD=/\0";
     let mut cursor = stack_pointer + 8;
-    let mut arguments = [0_u64; 4];
-    let argument_count = if argv.is_empty() { 1 } else { argv.len().min(arguments.len()) };
+    // argv[0] is always the program name, matching the usual C convention
+    // (and what `std::env::args().nth(0)` should be); any caller-supplied
+    // arguments follow it, so the caller's first real argument lands at
+    // `args().nth(1)` as expected, not `nth(0)`.
+    let mut arguments = [0_u64; 5];
+    let argument_count = 1 + argv.len().min(arguments.len() - 1);
     for index in (0..argument_count).rev() {
-        let value = if argv.is_empty() { program_name } else { argv[index] };
+        let value = if index == 0 { program_name } else { argv[index - 1] };
         cursor -= value.len() as u64 + 1;
         write_user_bytes(cursor, value);
         write_user_bytes(cursor + value.len() as u64, b"\0");
