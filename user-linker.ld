@@ -16,7 +16,7 @@ SECTIONS
   . = ALIGN(4K);
   .rodata : { *(.rodata*) } :rodata
   . = ALIGN(4K);
-  .data : { *(.data*) *(.bss*) *(COMMON) } :data
+  .data : { *(.data*) *(.bss*) *(.lbss*) *(.tdata*) *(.tbss*) *(COMMON) } :data
 
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }
 }

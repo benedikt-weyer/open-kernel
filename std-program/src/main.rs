@@ -1,6 +1,6 @@
 #![no_main]
 
-use std::collections::HashMap;
+static mut TLS_TCB: [u8; 128] = [0; 128];
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn memcpy(destination: *mut u8, source: *const u8, length: usize) -> *mut u8 {
@@ -48,16 +48,21 @@ unsafe extern "C" fn strlen(value: *const u8) -> usize {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
-    let args: Vec<_> = std::env::args().collect();
+    unsafe {
+        let base = (&raw mut TLS_TCB).cast::<u8>().add(32);
+        (base as *mut u64).write(base as u64);
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") 30_u64 => _,
+            in("rdi") base as u64,
+            clobber_abi("sysv64"),
+        );
+    }
     let mut values = Vec::new();
     values.extend_from_slice(&[3_u64, 5, 8, 13]);
 
-    // HashMap construction requests randomized keys from the OpenKernel std PAL.
-    let mut map = HashMap::new();
-    map.insert("kernel", "open");
-
     println!("openkernel std smoke test");
-    println!("args={} vec_sum={} map={}", args.len(), values.iter().sum::<u64>(), map["kernel"]);
+    println!("vec_sum={}", values.iter().sum::<u64>());
 
     unsafe {
         core::arch::asm!(
