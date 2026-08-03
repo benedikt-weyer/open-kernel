@@ -421,6 +421,7 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         29 => syscall_futex_wake(pointer, length),
         30 => syscall_set_tls_base(pointer),
         31 => syscall_getrandom(pointer, length),
+        32 => syscall_vfs_stat(pointer, length, argument),
         _ => u64::MAX,
     }
 }
@@ -562,6 +563,13 @@ fn syscall_getrandom(buffer: u64, length: u64) -> u64 {
         Ok(()) => length,
         Err(_) => u64::MAX,
     }
+}
+
+fn syscall_vfs_stat(fd: u64, buffer: u64, length: u64) -> u64 {
+    let Some(output) = user_bytes_mut(buffer, length, 16) else {
+        return u64::MAX;
+    };
+    crate::user::stat(fd, output)
 }
 
 fn syscall_write(pointer: u64, length: u64) -> u64 {

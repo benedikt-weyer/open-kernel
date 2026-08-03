@@ -224,6 +224,37 @@ pub(crate) fn close(fd: u64) -> u64 {
     0
 }
 
+pub(crate) fn stat(fd: u64, output: &mut [u8]) -> u64 {
+    if output.len() < 16 {
+        return u64::MAX;
+    }
+    let Some(index) = fd.checked_sub(3).map(|value| value as usize).filter(|index| *index < MAX_FDS) else {
+        return u64::MAX;
+    };
+    unsafe {
+        let descriptor = &(*(&raw const FILE_DESCRIPTORS))[index];
+        let Ok(path) = core::str::from_utf8(&descriptor.path[..descriptor.path_length]) else {
+            return u64::MAX;
+        };
+        let kind = match descriptor.kind {
+            DescriptorKind::File => 1,
+            DescriptorKind::Directory => 2,
+            DescriptorKind::Empty => return u64::MAX,
+        };
+        output[0] = kind;
+        output[1] = u8::from(!descriptor.writable);
+        let size = if descriptor.kind == DescriptorKind::File {
+            crate::vfs_open(path).map_or(0, |file| file.len()) as u64
+        } else {
+            0
+        };
+        for byte in 0..8 {
+            output[8 + byte] = (size >> (byte * 8)) as u8;
+        }
+    }
+    0
+}
+
 pub(crate) fn seek(fd: u64, offset: i64, whence: u64) -> u64 {
     let Some(index) = fd.checked_sub(3).map(|value| value as usize).filter(|index| *index < MAX_FDS) else {
         return u64::MAX;
