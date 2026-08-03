@@ -103,8 +103,11 @@ pub fn run_demo() -> Result<(), ElfError> {
         }
     }
     loaded.stack_pointer = initialize_process_stack(loaded.stack_pointer, b"init", &[]);
+    if loaded.fs_base != 0 {
+        write_user_word(loaded.fs_base, loaded.fs_base);
+    }
     crate::scheduler::initialize_user_process();
-    crate::scheduler::spawn_user(loaded.entry, 0, 0, Some(loaded.stack_pointer))
+    crate::scheduler::spawn_user(loaded.entry, 0, loaded.fs_base, Some(loaded.stack_pointer))
         .ok_or(PagingError::FrameAllocationFailed)?;
     crate::scheduler::start()
 }
@@ -179,8 +182,11 @@ pub(crate) fn spawn(path: &[u8], argv: &[&[u8]]) -> u64 {
     let previous_address_space = crate::active_address_space();
     unsafe { crate::switch_address_space(address_space) };
     let stack_pointer = initialize_process_stack(loaded.stack_pointer, path.as_bytes(), argv);
+    if loaded.fs_base != 0 {
+        write_user_word(loaded.fs_base, loaded.fs_base);
+    }
     unsafe { crate::switch_address_space(previous_address_space) };
-    let Some(thread) = crate::spawn_user_for_process(process, loaded.entry, 0, 0, Some(stack_pointer)) else {
+    let Some(thread) = crate::spawn_user_for_process(process, loaded.entry, 0, loaded.fs_base, Some(stack_pointer)) else {
         return u64::MAX;
     };
     crate::set_process_main_thread(process, thread);
@@ -464,5 +470,9 @@ fn write_user_bytes(address: u64, bytes: &[u8]) {
     for (index, byte) in bytes.iter().enumerate() {
         unsafe { core::ptr::write_volatile((address as *mut u8).add(index), *byte) };
     }
+}
+
+fn write_user_word(address: u64, value: u64) {
+    unsafe { core::ptr::write_volatile(address as *mut u64, value) };
 }
 

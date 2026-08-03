@@ -13,12 +13,15 @@ const PROGRAM_HEADER_TLS: u32 = 7;
 const PROGRAM_FLAG_EXECUTE: u32 = 1;
 const PROGRAM_FLAG_WRITE: u32 = 2;
 const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
+const USER_TLS_BASE: u64 = 0x0000_3000_0000_0000;
+const TLS_TCB_SIZE: u64 = 64;
 
 #[derive(Clone, Copy)]
 pub struct LoadedImage {
     pub entry: u64,
     pub stack_pointer: u64,
     pub tls: Option<TlsImage>,
+    pub fs_base: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -168,13 +171,58 @@ pub fn load_user_elf_into(
         return Err(ElfError::NoExecutableSegment);
     }
     let stack_top = allocate_user_stack_in(address_space, stack_slot)?;
+    let fs_base = if let Some(tls_image) = tls {
+        load_initial_tls(image, address_space, stack_slot, tls_image)?
+    } else {
+        0
+    };
     Ok(LoadedImage {
         entry,
         // `_start` is a Rust function entry point, so emulate a normal call:
         // the System V ABI requires RSP to be 8 modulo 16 on entry.
         stack_pointer: stack_top - 8,
         tls,
+        fs_base,
     })
+}
+
+fn load_initial_tls(
+    image: &[u8],
+    address_space: u64,
+    slot: usize,
+    tls: TlsImage,
+) -> Result<u64, ElfError> {
+    let align = tls.align.max(16);
+    let tls_size = tls.memory_size.max(1);
+    let block_size = tls_size.checked_add(align - 1).ok_or(ElfError::InvalidProgramHeader)? & !(align - 1);
+    let base = USER_TLS_BASE + (slot as u64) * 0x1_0000;
+    let fs_base = base.checked_add(block_size).ok_or(ElfError::InvalidProgramHeader)?;
+    let end = fs_base.checked_add(TLS_TCB_SIZE).ok_or(ElfError::InvalidProgramHeader)?;
+    let first_page = base & !(PAGE_SIZE - 1);
+    let last_page = (end - 1) & !(PAGE_SIZE - 1);
+    let mut page = first_page;
+    loop {
+        let frame = allocate_physical_frame().ok_or(PagingError::FrameAllocationFailed)?;
+        zero_physical_frame(frame);
+        map_user_page_in(address_space, page, frame, PageFlags::UserReadWrite)?;
+        let copy_start = page.max(base);
+        let copy_end = (page + PAGE_SIZE).min(base + tls.file_size);
+        if copy_start < copy_end {
+            let offset = (copy_start - base) as usize;
+            let source = tls.file_offset as usize + offset;
+            write_physical_frame(frame + copy_start - page, &image[source..source + (copy_end - copy_start) as usize]);
+        }
+        if page == last_page { break; }
+        page += PAGE_SIZE;
+    }
+    // Variant II TCB: FS points immediately after static TLS and FS:0 is self.
+    let tcb_page = fs_base & !(PAGE_SIZE - 1);
+    let tcb_offset = fs_base - tcb_page;
+    // The TCB lies in a page just mapped above; resolve it by temporarily using
+    // the direct physical map through the page-table walk is unnecessary here:
+    // write after activation in the process setup path.
+    let _ = tcb_offset;
+    Ok(fs_base)
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, ElfError> {
