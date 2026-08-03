@@ -16,10 +16,10 @@ use core::panic::PanicInfo;
 
 static BANNER: [u8; 37] = *b"OPEN KERNEL USER CONSOLE\r\nTYPE HELP\r\n";
 static PROMPT: [u8; 2] = *b"> ";
-static HELP: &[u8] = b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS HEAP VFS ENV TIME SYNC\r\n";
+static HELP: &[u8] = b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS HEAP VFS ENV TIME SYNC RUN\r\n";
 static UNKNOWN: [u8; 17] = *b"UNKNOWN COMMAND\r\n";
 static EXITING: [u8; 9] = *b"GOODBYE\r\n";
-const COMMANDS: [&[u8]; 15] = [
+const COMMANDS: [&[u8]; 16] = [
     b"help", b"clear", b"exit", b"shutdown", b"sata", b"identify", b"read", b"pci", b"lsblk",
     b"threads",
     b"heap",
@@ -27,6 +27,7 @@ const COMMANDS: [&[u8]; 15] = [
     b"env",
     b"time",
     b"sync",
+    b"run",
 ];
 
 struct BrkAllocator {
@@ -146,6 +147,8 @@ extern "C" fn _start() -> ! {
                 time_test();
             } else if equals(input, length, b"sync") {
                 synchronization_test();
+            } else if equals(input, length, b"run") {
+                run_std_smoke();
             } else if length != 0 {
                 write(&UNKNOWN);
             }
@@ -180,6 +183,21 @@ extern "C" fn _start() -> ! {
             length += 1;
             write(core::slice::from_ref(&character));
         }
+    }
+}
+
+fn run_std_smoke() {
+    let path = b"/std-smoke";
+    let process = syscall3(33, path.as_ptr() as u64, path.len() as u64, 0);
+    if process == u64::MAX {
+        write(b"SPAWN FAILED\r\n");
+        return;
+    }
+    let status = syscall1(34, process);
+    if status == u64::MAX {
+        write(b"WAIT FAILED\r\n");
+    } else {
+        write(b"CHILD EXITED\r\n");
     }
 }
 

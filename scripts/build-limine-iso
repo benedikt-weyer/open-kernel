@@ -9,11 +9,14 @@ USER_PROGRAM="$BUILD_DIR/init.elf"
 ISO="$BUILD_DIR/open-kernel-limine.iso"
 USER_MANIFEST="$ROOT_DIR/user-program/Cargo.toml"
 USER_BINARY="$ROOT_DIR/target/release/user-program"
+OPENKERNEL_STD="${OPENKERNEL_STD:-1}"
+OPENKERNEL_RUSTC="${OPENKERNEL_RUSTC:-/home/benedikt/Git/forks/rust-open-kernel/build/x86_64-unknown-linux-gnu/stage1/bin/rustc}"
 
-if [ "${OPENKERNEL_STD:-0}" = 1 ]; then
-    : "${OPENKERNEL_RUSTC:?Set OPENKERNEL_RUSTC to the stage1 OpenKernel rustc}"
-    USER_MANIFEST="$ROOT_DIR/std-program/Cargo.toml"
-    USER_BINARY="$ROOT_DIR/target/x86_64-unknown-openkernel/release/openkernel-std-smoke"
+if [ "$OPENKERNEL_STD" = 1 ]; then
+    if [ ! -x "$OPENKERNEL_RUSTC" ]; then
+        printf 'OpenKernel compiler not found: %s\n' "$OPENKERNEL_RUSTC" >&2
+        exit 1
+    fi
 fi
 
 for command in cargo limine ld xorriso; do
@@ -33,17 +36,14 @@ cargo rustc --manifest-path "$ROOT_DIR/limine-adapter/Cargo.toml" --release \
     -C no-redzone=yes -C linker=ld -C link-arg=-melf_x86_64 \
     -C link-arg=-T"$ROOT_DIR/linker-limine.ld" -C link-arg=-nostdlib \
     -C link-arg=-z -C link-arg=max-page-size=0x1000
-if [ "${OPENKERNEL_STD:-0}" = 1 ]; then
-    RUSTC="$OPENKERNEL_RUSTC" cargo rustc --manifest-path "$USER_MANIFEST" --release \
-        --target x86_64-unknown-openkernel -- \
+cargo rustc --manifest-path "$USER_MANIFEST" --release -- \
         -C relocation-model=static -C code-model=large -C linker=ld -C link-arg=-melf_x86_64 \
         -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib \
         -C link-arg=-z -C link-arg=max-page-size=0x1000
-else
-    cargo rustc --manifest-path "$USER_MANIFEST" --release -- \
-        -C relocation-model=static -C code-model=large -C linker=ld -C link-arg=-melf_x86_64 \
-        -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib \
-        -C link-arg=-z -C link-arg=max-page-size=0x1000
+if [ "$OPENKERNEL_STD" = 1 ]; then
+    RUSTC="$OPENKERNEL_RUSTC" cargo rustc --manifest-path "$ROOT_DIR/std-program/Cargo.toml" --release \
+        --target x86_64-unknown-openkernel -- -C relocation-model=static -C code-model=large -C linker=ld \
+        -C link-arg=-melf_x86_64 -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib
 fi
 cp "$ROOT_DIR/target/release/limine-adapter" "$KERNEL"
 cp "$USER_BINARY" "$USER_PROGRAM"
@@ -51,6 +51,10 @@ cp "$USER_BINARY" "$USER_PROGRAM"
 cp "$KERNEL" "$ISO_ROOT/boot/open-kernel-limine.elf"
 cp "$USER_PROGRAM" "$ISO_ROOT/boot/init.elf"
 cp "$ROOT_DIR/limine.conf" "$ISO_ROOT/boot/limine/limine.conf"
+if [ "$OPENKERNEL_STD" = 1 ]; then
+    cp "$ROOT_DIR/target/x86_64-unknown-openkernel/release/openkernel-std-smoke" "$ISO_ROOT/boot/std-smoke.elf"
+    printf 'module_path: boot():/boot/std-smoke.elf\nmodule_string: std-smoke\n' >> "$ISO_ROOT/boot/limine/limine.conf"
+fi
 cp "$LIMINE_DIR/limine-bios.sys" "$ISO_ROOT/boot/limine/limine-bios.sys"
 cp "$LIMINE_DIR/limine-bios-cd.bin" "$ISO_ROOT/boot/limine/limine-bios-cd.bin"
 cp "$LIMINE_DIR/limine-uefi-cd.bin" "$ISO_ROOT/boot/limine/limine-uefi-cd.bin"
