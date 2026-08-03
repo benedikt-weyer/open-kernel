@@ -4,6 +4,7 @@ mod arch;
 mod console;
 mod drivers;
 mod memory;
+mod mouse;
 mod paging;
 mod scheduler;
 mod serial;
@@ -21,6 +22,7 @@ pub use memory::{
     PhysicalMemoryStats, allocate_physical_frame, free_physical_frame, initialize_physical_memory,
     physical_memory_stats,
 };
+pub use mouse::{initialize as initialize_mouse, poll as poll_mouse, position as mouse_position};
 pub use paging::{
     DEVICE_WINDOW_BASE, FUTURE_USER_SPACE_BASE, KERNEL_STACK_GUARD_PAGE, PageFlags, PagingConfig,
     PagingError, initialize_virtual_memory, map_user_page,

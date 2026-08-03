@@ -65,6 +65,7 @@ impl BootInfo {
 
 pub fn boot(info: BootInfo) -> ! {
     X86_64::initialize();
+    crate::initialize_mouse();
 
     Com1.write(b"open-kernel: ");
     Com1.write(info.bootloader.as_bytes());
@@ -133,8 +134,11 @@ fn run_framebuffer_console(framebuffer: Framebuffer, bootloader: &[u8], status: 
     );
 
     loop {
-        crate::scheduler::yield_if_preempted();
         let mut redraw = false;
+        if crate::poll_mouse() {
+            redraw = true;
+        }
+        crate::scheduler::yield_if_preempted();
 
         match read_key() {
             Some(b'\n') => {
@@ -214,6 +218,11 @@ fn render_framebuffer_console(
     draw_framebuffer_text(framebuffer, response, 32, 144, 2, 0x00FF_FFFF);
     draw_framebuffer_text(framebuffer, b"> ", 32, 176, 2, 0x00B8_E8FF);
     draw_framebuffer_text(framebuffer, input, 56, 176, 2, 0x00FF_FFFF);
+    let (cursor_x, cursor_y) = crate::mouse_position();
+    for offset in 0..10 {
+        put_framebuffer_pixel(framebuffer, cursor_x + offset, cursor_y, 0x00FF_FFFF);
+        put_framebuffer_pixel(framebuffer, cursor_x, cursor_y + offset, 0x00FF_FFFF);
+    }
 }
 
 fn run_console_command(
