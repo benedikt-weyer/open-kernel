@@ -6,7 +6,7 @@ use core::panic::PanicInfo;
 
 static BANNER: [u8; 37] = *b"OPEN KERNEL USER CONSOLE\r\nTYPE HELP\r\n";
 static PROMPT: [u8; 2] = *b"> ";
-static HELP: [u8; 55] = *b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ\r\n";
+static HELP: [u8; 59] = *b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI\r\n";
 static UNKNOWN: [u8; 17] = *b"UNKNOWN COMMAND\r\n";
 static EXITING: [u8; 9] = *b"GOODBYE\r\n";
 
@@ -43,6 +43,8 @@ extern "C" fn _start() -> ! {
                 syscall0(11);
             } else if equals(input, length, b"read") {
                 syscall0(12);
+            } else if equals(input, length, b"pci") {
+                syscall0(13);
             } else if length != 0 {
                 write(&UNKNOWN);
             }

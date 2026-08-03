@@ -1,4 +1,3 @@
-use core::arch::asm;
 use core::ptr::{read_volatile, write_volatile};
 
 use crate::{
@@ -6,11 +5,6 @@ use crate::{
     zero_physical_frame,
 };
 
-const PCI_CONFIG_ADDRESS: u16 = 0xCF8;
-const PCI_CONFIG_DATA: u16 = 0xCFC;
-const AHCI_CLASS: u8 = 0x01;
-const AHCI_SUBCLASS: u8 = 0x06;
-const AHCI_PROGIF: u8 = 0x01;
 const HBA_GHC: usize = 0x04;
 const HBA_PI: usize = 0x0C;
 const HBA_GHC_AE: u32 = 1 << 31;
@@ -56,9 +50,10 @@ struct Controller {
 static mut CONTROLLER: Option<Controller> = None;
 
 pub fn initialize() -> Result<(), SataError> {
-    let Some(bar) = find_ahci_bar() else {
+    let Some(ahci) = crate::pci::find_ahci_controller() else {
         return Err(SataError::NotFound);
     };
+    let bar = ahci.abar;
     map_device_page(AHCI_MMIO_BASE, bar).map_err(|_| SataError::AllocationFailed)?;
     map_device_page(AHCI_MMIO_BASE + PAGE_SIZE, bar + PAGE_SIZE)
         .map_err(|_| SataError::AllocationFailed)?;
@@ -197,43 +192,6 @@ fn stop_port(mmio: *mut u8, base: usize) -> Result<(), SataError> {
         return Err(SataError::Timeout);
     }
     Ok(())
-}
-
-fn find_ahci_bar() -> Option<u64> {
-    for bus in 0..256 {
-        for device in 0..32 {
-            for function in 0..8 {
-                let id = pci_read(bus, device, function, 0);
-                if id == u32::MAX {
-                    if function == 0 {
-                        break;
-                    }
-                    continue;
-                }
-                let class = pci_read(bus, device, function, 8);
-                if ((class >> 24) as u8, (class >> 16) as u8, (class >> 8) as u8)
-                    == (AHCI_CLASS, AHCI_SUBCLASS, AHCI_PROGIF)
-                {
-                    return Some((pci_read(bus, device, function, 0x24) & !0xF) as u64);
-                }
-            }
-        }
-    }
-    None
-}
-
-fn pci_read(bus: u16, device: u16, function: u16, offset: u16) -> u32 {
-    let address = 0x8000_0000
-        | (u32::from(bus) << 16)
-        | (u32::from(device) << 11)
-        | (u32::from(function) << 8)
-        | u32::from(offset & 0xFC);
-    unsafe {
-        asm!("out dx, eax", in("dx") PCI_CONFIG_ADDRESS, in("eax") address, options(nostack));
-        let value: u32;
-        asm!("in eax, dx", in("dx") PCI_CONFIG_DATA, out("eax") value, options(nostack));
-        value
-    }
 }
 
 fn read_register(mmio: *mut u8, offset: usize) -> u32 {

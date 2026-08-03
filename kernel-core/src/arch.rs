@@ -328,6 +328,7 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64) -> u64 {
         10 => syscall_sata_status(),
         11 => syscall_sata_identify(),
         12 => syscall_sata_read(),
+        13 => syscall_pci_status(),
         _ => u64::MAX,
     }
 }
@@ -376,6 +377,33 @@ fn syscall_sata_status() -> u64 {
         console_output(b"SATA: NO AHCI DEVICE\r\n");
         u64::MAX
     }
+}
+
+fn syscall_pci_status() -> u64 {
+    let count = crate::pci_device_count();
+    console_output(b"PCI DEVICES: ");
+    let mut digits = [0_u8; 20];
+    let mut value = count;
+    let mut length = 0;
+    if value == 0 {
+        digits[0] = b'0';
+        length = 1;
+    } else {
+        while value != 0 {
+            digits[length] = b'0' + (value % 10) as u8;
+            value /= 10;
+            length += 1;
+        }
+        digits[..length].reverse();
+    }
+    console_output(&digits[..length]);
+    console_output(b"\r\n");
+    if crate::find_ahci_controller().is_some() {
+        console_output(b"PCI AHCI CONTROLLER FOUND\r\n");
+    } else {
+        console_output(b"PCI AHCI CONTROLLER NOT FOUND\r\n");
+    }
+    count as u64
 }
 
 fn syscall_sata_identify() -> u64 {
