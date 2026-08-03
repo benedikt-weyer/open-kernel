@@ -1,7 +1,7 @@
 #![no_std]
 
-use core::{arch::asm, panic::PanicInfo};
 use core::ptr::write_volatile;
+use core::{arch::asm, panic::PanicInfo};
 
 const VGA_TEXT_BUFFER: *mut u16 = 0xB8000 as *mut u16;
 const VGA_COLOR: u16 = 0x0F00;
