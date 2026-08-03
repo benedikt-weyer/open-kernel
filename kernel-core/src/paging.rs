@@ -11,6 +11,7 @@ const NO_EXECUTE: u64 = 1 << 63;
 pub const PAGE_SIZE: u64 = 4096;
 pub const DEVICE_WINDOW_BASE: u64 = 0xFFFF_FF00_0000_0000;
 pub const KERNEL_STACK_GUARD_PAGE: u64 = 0xFFFF_FF10_0000_0000;
+const KERNEL_STACK_PAGES: u64 = 4;
 pub const FUTURE_USER_SPACE_BASE: u64 = 0x0000_4000_0000_0000;
 
 #[derive(Clone, Copy)]
@@ -75,13 +76,6 @@ pub fn initialize_virtual_memory(config: PagingConfig) -> Result<(), PagingError
         config.kernel_size,
     );
     map_page(DEVICE_WINDOW_BASE, 0xB8000, PageFlags::Device)?;
-    for offset in 1..=4 {
-        map_page(
-            KERNEL_STACK_GUARD_PAGE + offset * PAGE_SIZE,
-            allocate_physical_frame().ok_or(PagingError::FrameAllocationFailed)?,
-            PageFlags::KernelReadWrite,
-        )?;
-    }
     Ok(())
 }
 
@@ -140,6 +134,20 @@ pub fn map_device_page(virtual_address: u64, physical_address: u64) -> Result<()
         return Err(PagingError::InvalidUserAddress);
     }
     map_page(virtual_address, physical_address, PageFlags::Device)
+}
+
+pub fn allocate_kernel_stack(slot: usize) -> Result<u64, PagingError> {
+    let stack_base = KERNEL_STACK_GUARD_PAGE
+        + (slot as u64) * (KERNEL_STACK_PAGES + 1) * PAGE_SIZE
+        + PAGE_SIZE;
+    for page in 0..KERNEL_STACK_PAGES {
+        map_page(
+            stack_base + page * PAGE_SIZE,
+            allocate_physical_frame().ok_or(PagingError::FrameAllocationFailed)?,
+            PageFlags::KernelReadWrite,
+        )?;
+    }
+    Ok(stack_base + KERNEL_STACK_PAGES * PAGE_SIZE)
 }
 
 fn map_page(

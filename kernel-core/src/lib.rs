@@ -9,6 +9,7 @@ mod memory;
 mod mouse;
 mod pci;
 mod paging;
+#[path = "threads.rs"]
 mod scheduler;
 mod sata;
 mod serial;
@@ -37,11 +38,15 @@ pub use mouse::{initialize as initialize_mouse, poll as poll_mouse, position as 
 pub use pci::{AhciController, PciDevice, device_count as pci_device_count, enumerate as enumerate_pci, find_ahci_controller};
 pub use paging::{
     DEVICE_WINDOW_BASE, FUTURE_USER_SPACE_BASE, KERNEL_STACK_GUARD_PAGE, PageFlags, PagingConfig,
-    PagingError, initialize_virtual_memory, map_user_code_page, map_user_page,
+    PagingError, allocate_kernel_stack, initialize_virtual_memory, map_user_code_page, map_user_page,
     map_device_page, map_user_page_with_flags, physical_to_virtual, write_physical_frame,
     zero_physical_frame,
 };
-pub use scheduler::{TaskEntry, spawn as spawn_task, start as start_scheduler, yield_now};
+pub use scheduler::{
+    TaskEntry, ThreadId, ThreadState, block_current as block_current_thread,
+    exit_current as exit_current_thread, spawn as spawn_task, start as start_scheduler,
+    state as thread_state, wake as wake_thread, yield_now,
+};
 pub use sata::{
     SataBlockDevice, SataError, identify as sata_identify,
     identify_model_byte as sata_identify_model_byte, initialize as initialize_sata,

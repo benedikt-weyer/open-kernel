@@ -12,7 +12,7 @@ pub fn run_demo() -> Result<(), ElfError> {
     crate::scheduler::start()
 }
 
-pub(crate) extern "C" fn user_entry() -> ! {
+pub(crate) extern "C" fn user_entry() {
     let image = unsafe { USER_IMAGE.expect("user image missing") };
     unsafe {
         crate::arch::enter_user_mode(image.entry, image.stack_pointer);
