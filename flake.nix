@@ -11,12 +11,20 @@
       devShells = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
+          limineIso = pkgs.limine.overrideAttrs (old: {
+            configureFlags = old.configureFlags ++ [
+              "--enable-bios-cd"
+              "--enable-uefi-cd"
+            ];
+            nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.mtools ];
+          });
         in {
           default = pkgs.mkShell {
             packages = with pkgs; [
               binutils
               cargo
               grub2
+              limineIso
               rustc
               xorriso
             ];

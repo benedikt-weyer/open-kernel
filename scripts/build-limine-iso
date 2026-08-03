@@ -1,0 +1,42 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+BUILD_DIR="$ROOT_DIR/build"
+ISO_ROOT="$BUILD_DIR/limine-iso-root"
+KERNEL="$BUILD_DIR/open-kernel-limine.elf"
+ISO="$BUILD_DIR/open-kernel-limine.iso"
+
+for command in cargo limine ld xorriso; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+        printf 'Missing required command: %s\n' "$command" >&2
+        exit 1
+    fi
+done
+
+LIMINE_DIR=$(limine --print-datadir)
+
+rm -rf "$ISO_ROOT"
+mkdir -p "$BUILD_DIR" "$ISO_ROOT/boot/limine" "$ISO_ROOT/EFI/BOOT"
+
+cargo rustc --manifest-path "$ROOT_DIR/kernel-limine/Cargo.toml" --release \
+    --bin open-kernel-limine -- -C relocation-model=static -C code-model=kernel \
+    -C no-redzone=yes -C linker=ld -C link-arg=-melf_x86_64 \
+    -C link-arg=-T"$ROOT_DIR/linker-limine.ld" -C link-arg=-nostdlib \
+    -C link-arg=-z -C link-arg=max-page-size=0x1000
+cp "$ROOT_DIR/target/release/open-kernel-limine" "$KERNEL"
+
+cp "$KERNEL" "$ISO_ROOT/boot/open-kernel-limine.elf"
+cp "$ROOT_DIR/limine.conf" "$ISO_ROOT/boot/limine/limine.conf"
+cp "$LIMINE_DIR/limine-bios.sys" "$ISO_ROOT/boot/limine/limine-bios.sys"
+cp "$LIMINE_DIR/limine-bios-cd.bin" "$ISO_ROOT/boot/limine/limine-bios-cd.bin"
+cp "$LIMINE_DIR/limine-uefi-cd.bin" "$ISO_ROOT/boot/limine/limine-uefi-cd.bin"
+cp "$LIMINE_DIR/BOOTX64.EFI" "$ISO_ROOT/EFI/BOOT/BOOTX64.EFI"
+
+xorriso -as mkisofs -R -r -J -b boot/limine/limine-bios-cd.bin -no-emul-boot \
+    -boot-load-size 4 -boot-info-table --efi-boot boot/limine/limine-uefi-cd.bin \
+    -efi-boot-part --efi-boot-image --protective-msdos-label \
+    -o "$ISO" "$ISO_ROOT"
+limine bios-install "$ISO"
+
+printf 'Created %s\n' "$ISO"

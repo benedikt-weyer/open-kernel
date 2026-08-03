@@ -9,10 +9,12 @@ Environment
 
 Build
   build-iso                Build build/open-kernel.iso with GRUB.
+  build-limine-iso         Build build/open-kernel-limine.iso with Limine.
 
 Run
   qemu-system-x86_64 -cdrom build/open-kernel.iso
   run                      Build the ISO and start it in QEMU.
+  run-lim                  Build the Limine ISO and start it in QEMU.
 
 Nix
   nix develop              Open the development shell without direnv.

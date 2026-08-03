@@ -1,5 +1,5 @@
 [workspace]
-members = ["bootstrap", "kernel64"]
+members = ["bootstrap", "kernel64", "kernel-limine"]
 resolver = "3"
 
 [profile.dev]

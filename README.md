@@ -19,6 +19,16 @@ scripts/build-iso
 
 The ISO is written to `build/open-kernel.iso`.
 
+## Build a Limine ISO
+
+```sh
+nix develop
+scripts/build-limine-iso
+```
+
+The Limine protocol boots `kernel-limine` directly in 64-bit long mode. Its ISO
+is written to `build/open-kernel-limine.iso`.
+
 ## Run it
 
 ```sh

@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+"$ROOT_DIR/scripts/build-limine-iso"
+exec qemu-system-x86_64 -m 128M -boot once=d \
+    -drive file="$ROOT_DIR/build/open-kernel-limine.iso",media=cdrom,readonly=on,format=raw \
+    "$@"
