@@ -11,7 +11,6 @@ const IA32_EFER: u32 = 0xC000_0080;
 const IA32_STAR: u32 = 0xC000_0081;
 const IA32_LSTAR: u32 = 0xC000_0082;
 const IA32_FMASK: u32 = 0xC000_0084;
-const USER_RFLAGS: u64 = 1 << 9 | 1 << 1;
 const SYSCALL_STACK_SIZE: usize = 16 * 1024;
 
 static mut GDT: [u64; 7] = [
@@ -60,7 +59,9 @@ static mut USER_SYSCALL_NUMBER: u64 = 0;
 static mut USER_SYSCALL_POINTER: u64 = 0;
 #[unsafe(no_mangle)]
 static mut USER_SYSCALL_LENGTH: u64 = 0;
-static mut DEMO_SPAWNED: bool = false;
+#[unsafe(no_mangle)]
+static mut USER_SYSCALL_CONTEXT: crate::scheduler::UserContext =
+    crate::scheduler::UserContext::EMPTY;
 
 #[repr(C, packed)]
 struct DescriptorTablePointer {
@@ -159,6 +160,24 @@ irq_stub x86_serial_irq_stub, 36
 .global x86_syscall_stub
 .type x86_syscall_stub, @function
 x86_syscall_stub:
+    mov %rsp, USER_SYSCALL_CONTEXT+8(%rip)
+    mov %rcx, USER_SYSCALL_CONTEXT(%rip)
+    mov %r11, USER_SYSCALL_CONTEXT+16(%rip)
+    mov %rax, USER_SYSCALL_CONTEXT+24(%rip)
+    mov %rbx, USER_SYSCALL_CONTEXT+32(%rip)
+    mov %rcx, USER_SYSCALL_CONTEXT+40(%rip)
+    mov %rdx, USER_SYSCALL_CONTEXT+48(%rip)
+    mov %rsi, USER_SYSCALL_CONTEXT+56(%rip)
+    mov %rdi, USER_SYSCALL_CONTEXT+64(%rip)
+    mov %rbp, USER_SYSCALL_CONTEXT+72(%rip)
+    mov %r8, USER_SYSCALL_CONTEXT+80(%rip)
+    mov %r9, USER_SYSCALL_CONTEXT+88(%rip)
+    mov %r10, USER_SYSCALL_CONTEXT+96(%rip)
+    mov %r11, USER_SYSCALL_CONTEXT+104(%rip)
+    mov %r12, USER_SYSCALL_CONTEXT+112(%rip)
+    mov %r13, USER_SYSCALL_CONTEXT+120(%rip)
+    mov %r14, USER_SYSCALL_CONTEXT+128(%rip)
+    mov %r15, USER_SYSCALL_CONTEXT+136(%rip)
     mov %rsp, USER_SYSCALL_STACK_POINTER(%rip)
     mov %rcx, USER_SYSCALL_RIP(%rip)
     mov %r11, USER_SYSCALL_RFLAGS(%rip)
@@ -176,6 +195,9 @@ x86_syscall_stub:
     pushq %rax
     call scheduler_current_syscall_state
     mov %rax, %rdx
+    pushq %rdx
+    call scheduler_set_tss_stack
+    popq %rdx
     popq %rax
     pushq $0x1B
     pushq (%rdx)
@@ -262,20 +284,40 @@ fn initialize_syscalls() {
     }
 }
 
-pub unsafe fn enter_user_mode(entry: u64, stack_pointer: u64) -> ! {
+pub fn set_user_kernel_stack(stack_top: u64) {
+    unsafe {
+        (*(&raw mut TSS)).rsp[0] = stack_top;
+    }
+}
+
+pub unsafe fn resume_user_context(context: *const crate::scheduler::UserContext) -> ! {
+    set_user_kernel_stack(crate::scheduler::current_kernel_stack_top());
     unsafe {
         asm!(
             "push {user_data}",
-            "push {stack_pointer}",
-            "push {flags}",
+            "push qword ptr [rdi + 8]",
+            "push qword ptr [rdi + 16]",
             "push {user_code}",
-            "push {entry}",
+            "push qword ptr [rdi]",
+            "mov rax, [rdi + 24]",
+            "mov rbx, [rdi + 32]",
+            "mov rcx, [rdi + 40]",
+            "mov rdx, [rdi + 48]",
+            "mov rsi, [rdi + 56]",
+            "mov rbp, [rdi + 72]",
+            "mov r8, [rdi + 80]",
+            "mov r9, [rdi + 88]",
+            "mov r10, [rdi + 96]",
+            "mov r11, [rdi + 104]",
+            "mov r12, [rdi + 112]",
+            "mov r13, [rdi + 120]",
+            "mov r14, [rdi + 128]",
+            "mov r15, [rdi + 136]",
+            "mov rdi, [rdi + 64]",
             "iretq",
             user_data = in(reg) USER_DATA,
-            stack_pointer = in(reg) stack_pointer,
-            flags = in(reg) USER_RFLAGS,
             user_code = in(reg) USER_CODE,
-            entry = in(reg) entry,
+            in("rdi") context,
             options(noreturn),
         );
     }
@@ -293,11 +335,21 @@ extern "C" fn scheduler_save_syscall_state() {
         instruction_pointer: unsafe { core::ptr::read_volatile(&raw const USER_SYSCALL_RIP) },
         flags: unsafe { core::ptr::read_volatile(&raw const USER_SYSCALL_RFLAGS) },
     });
+    unsafe {
+        crate::scheduler::save_user_context(core::ptr::read_volatile(
+            &raw const USER_SYSCALL_CONTEXT,
+        ));
+    }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn scheduler_current_syscall_state() -> *const crate::scheduler::SyscallState {
     crate::scheduler::current_syscall_state()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn scheduler_set_tss_stack() {
+    set_user_kernel_stack(crate::scheduler::current_kernel_stack_top());
 }
 
 #[unsafe(no_mangle)]
@@ -329,19 +381,20 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64) -> u64 {
         12 => syscall_sata_read(),
         13 => syscall_pci_status(),
         14 => syscall_lsblk(),
+        15 => syscall_thread_create(pointer, length),
+        16 => crate::scheduler::exit_current_with_status(pointer),
+        17 => crate::scheduler::join(pointer as usize).unwrap_or(u64::MAX),
         _ => u64::MAX,
     }
 }
 
 fn syscall_spawn() -> u64 {
-    unsafe {
-        if core::ptr::read_volatile(&raw const DEMO_SPAWNED) {
-            return u64::MAX;
-        }
-        core::ptr::write_volatile(&raw mut DEMO_SPAWNED, true);
-    }
-    crate::scheduler::spawn(crate::user::user_entry)
-        .map(|task| task as u64)
+    u64::MAX
+}
+
+fn syscall_thread_create(entry: u64, argument: u64) -> u64 {
+    crate::scheduler::spawn_user(entry, argument, None)
+        .map(|thread| thread as u64)
         .unwrap_or(u64::MAX)
 }
 

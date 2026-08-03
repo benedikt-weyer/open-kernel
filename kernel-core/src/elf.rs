@@ -1,6 +1,6 @@
 use crate::{
     FUTURE_USER_SPACE_BASE, PAGE_SIZE, PageFlags, PagingError, allocate_physical_frame,
-    map_user_page_with_flags, write_physical_frame, zero_physical_frame,
+    allocate_user_stack, map_user_page_with_flags, write_physical_frame, zero_physical_frame,
 };
 
 const ELF_HEADER_SIZE: usize = 64;
@@ -11,8 +11,6 @@ const PROGRAM_HEADER_LOAD: u32 = 1;
 const PROGRAM_FLAG_EXECUTE: u32 = 1;
 const PROGRAM_FLAG_WRITE: u32 = 2;
 const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
-const USER_STACK_TOP: u64 = USER_SPACE_END - PAGE_SIZE;
-const USER_STACK_PAGES: u64 = 4;
 
 #[derive(Clone, Copy)]
 pub struct LoadedImage {
@@ -130,17 +128,12 @@ pub fn load_user_elf(image: &[u8]) -> Result<LoadedImage, ElfError> {
     if !entry_is_executable {
         return Err(ElfError::NoExecutableSegment);
     }
-    for index in 1..=USER_STACK_PAGES {
-        let address = USER_STACK_TOP - index * PAGE_SIZE;
-        let frame = allocate_physical_frame().ok_or(PagingError::FrameAllocationFailed)?;
-        zero_physical_frame(frame);
-        map_user_page_with_flags(address, frame, PageFlags::UserReadWrite)?;
-    }
+    let stack_top = allocate_user_stack(0)?;
     Ok(LoadedImage {
         entry,
         // `_start` is a Rust function entry point, so emulate a normal call:
         // the System V ABI requires RSP to be 8 modulo 16 on entry.
-        stack_pointer: USER_STACK_TOP - 8,
+        stack_pointer: stack_top - 8,
     })
 }
 

@@ -8,13 +8,8 @@ pub fn run_demo() -> Result<(), ElfError> {
     unsafe {
         USER_IMAGE = Some(loaded);
     }
-    crate::scheduler::spawn(user_entry).ok_or(PagingError::FrameAllocationFailed)?;
+    crate::scheduler::initialize_user_process();
+    crate::scheduler::spawn_user(loaded.entry, 0, Some(loaded.stack_pointer))
+        .ok_or(PagingError::FrameAllocationFailed)?;
     crate::scheduler::start()
-}
-
-pub(crate) extern "C" fn user_entry() {
-    let image = unsafe { USER_IMAGE.expect("user image missing") };
-    unsafe {
-        crate::arch::enter_user_mode(image.entry, image.stack_pointer);
-    }
 }

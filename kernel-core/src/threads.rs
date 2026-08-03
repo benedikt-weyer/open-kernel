@@ -5,7 +5,9 @@ const NO_THREAD: usize = usize::MAX;
 const IDLE_THREAD: usize = 0;
 
 pub type ThreadId = usize;
+pub type ProcessId = usize;
 pub type TaskEntry = extern "C" fn();
+pub const USER_PROCESS_ID: ProcessId = 1;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ThreadState {
@@ -13,6 +15,42 @@ pub enum ThreadState {
     Running,
     Blocked,
     Exited,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct UserContext {
+    pub rip: u64,
+    pub rsp: u64,
+    pub rflags: u64,
+    pub rax: u64,
+    pub rbx: u64,
+    pub rcx: u64,
+    pub rdx: u64,
+    pub rsi: u64,
+    pub rdi: u64,
+    pub rbp: u64,
+    pub r8: u64,
+    pub r9: u64,
+    pub r10: u64,
+    pub r11: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
+}
+impl UserContext {
+    pub const EMPTY: Self = Self {
+        rip: 0, rsp: 0, rflags: 0x202, rax: 0, rbx: 0, rcx: 0, rdx: 0,
+        rsi: 0, rdi: 0, rbp: 0, r8: 0, r9: 0, r10: 0, r11: 0, r12: 0,
+        r13: 0, r14: 0, r15: 0,
+    };
+}
+
+#[derive(Clone, Copy)]
+pub struct Process {
+    pub id: ProcessId,
+    pub address_space: u64,
 }
 
 #[repr(C)]
@@ -57,23 +95,33 @@ impl SyscallState {
 struct Thread {
     context: Context,
     entry: Option<TaskEntry>,
+    process: Option<ProcessId>,
+    user_context: UserContext,
+    is_user: bool,
     state: ThreadState,
     syscall_state: SyscallState,
     stack_top: u64,
     syscall_stack_top: u64,
     stack_allocated: bool,
     reapable: bool,
+    exit_status: u64,
+    join_waiter: usize,
 }
 impl Thread {
     const EMPTY: Self = Self {
         context: Context::EMPTY,
         entry: None,
+        process: None,
+        user_context: UserContext::EMPTY,
+        is_user: false,
         state: ThreadState::Exited,
         syscall_state: SyscallState::EMPTY,
         stack_top: 0,
         syscall_stack_top: 0,
         stack_allocated: false,
-        reapable: false,
+        reapable: true,
+        exit_status: 0,
+        join_waiter: NO_THREAD,
     };
 }
 
@@ -86,6 +134,10 @@ static mut SCHEDULER_CONTEXT: Context = Context::EMPTY;
 static mut CURRENT_THREAD: usize = NO_THREAD;
 static mut PREEMPT_REQUESTED: bool = false;
 static mut IDLE_CREATED: bool = false;
+static mut USER_PROCESS: Process = Process {
+    id: USER_PROCESS_ID,
+    address_space: 0,
+};
 
 unsafe extern "C" {
     fn scheduler_context_switch(from: *mut Context, to: *const Context);
@@ -119,7 +171,7 @@ pub fn spawn(entry: TaskEntry) -> Option<ThreadId> {
     unsafe {
         for slot in 1..MAX_THREADS {
             let thread = &mut (*(&raw mut THREADS))[slot];
-            if thread.state != ThreadState::Exited || (!thread.reapable && thread.entry.is_some()) {
+            if thread.state != ThreadState::Exited || !thread.reapable {
                 continue;
             }
             if !thread.stack_allocated {
@@ -137,12 +189,75 @@ pub fn spawn(entry: TaskEntry) -> Option<ThreadId> {
                     ..Context::EMPTY
                 },
                 entry: Some(entry),
+                process: None,
+                user_context: UserContext::EMPTY,
+                is_user: false,
                 state: ThreadState::Ready,
                 syscall_state: SyscallState::EMPTY,
                 stack_top,
                 syscall_stack_top,
                 stack_allocated: true,
                 reapable: false,
+                exit_status: 0,
+                join_waiter: NO_THREAD,
+            };
+            enqueue(slot);
+            return Some(slot);
+        }
+    }
+    None
+}
+
+pub fn initialize_user_process() {
+    unsafe {
+        let address_space: u64;
+        asm!("mov {}, cr3", out(reg) address_space, options(nomem, nostack));
+        (*(&raw mut USER_PROCESS)).address_space = address_space;
+    }
+}
+
+pub fn spawn_user(entry: u64, argument: u64, initial_stack: Option<u64>) -> Option<ThreadId> {
+    if !crate::is_user_executable(entry) {
+        return None;
+    }
+    unsafe {
+        for slot in 1..MAX_THREADS {
+            let thread = &mut (*(&raw mut THREADS))[slot];
+            if thread.state != ThreadState::Exited || !thread.reapable {
+                continue;
+            }
+            if !thread.stack_allocated {
+                thread.stack_top = crate::allocate_kernel_stack(slot).ok()?;
+                thread.syscall_stack_top = crate::allocate_kernel_stack(slot + MAX_THREADS).ok()?;
+                thread.stack_allocated = true;
+            }
+            let user_stack = match initial_stack {
+                Some(stack) => stack,
+                None => crate::allocate_user_stack(slot).ok()?.checked_sub(8)?,
+            };
+            let stack_top = thread.stack_top;
+            let syscall_stack_top = thread.syscall_stack_top;
+            let initial_kernel_stack = (stack_top - 16) as *mut u64;
+            initial_kernel_stack.write(user_thread_trampoline as *const () as u64);
+            *thread = Thread {
+                context: Context { stack_pointer: initial_kernel_stack as u64, ..Context::EMPTY },
+                entry: None,
+                process: Some(USER_PROCESS_ID),
+                user_context: UserContext {
+                    rip: entry,
+                    rsp: user_stack,
+                    rdi: argument,
+                    ..UserContext::EMPTY
+                },
+                is_user: true,
+                state: ThreadState::Ready,
+                syscall_state: SyscallState::EMPTY,
+                stack_top,
+                syscall_stack_top,
+                stack_allocated: true,
+                reapable: false,
+                exit_status: 0,
+                join_waiter: NO_THREAD,
             };
             enqueue(slot);
             return Some(slot);
@@ -200,17 +315,56 @@ pub fn wake(thread: ThreadId) -> bool {
 }
 
 pub fn exit_current() -> ! {
+    exit_current_with_status(0)
+}
+
+pub fn exit_current_with_status(status: u64) -> ! {
     unsafe {
         let current = CURRENT_THREAD;
         if current != NO_THREAD && current != IDLE_THREAD {
             let task = &mut (*(&raw mut THREADS))[current];
             task.state = ThreadState::Exited;
             task.entry = None;
-            task.reapable = true;
+            task.exit_status = status;
+            task.reapable = !task.is_user;
+            if task.join_waiter != NO_THREAD {
+                let waiter = task.join_waiter;
+                task.join_waiter = NO_THREAD;
+                let waiting = &mut (*(&raw mut THREADS))[waiter];
+                if waiting.state == ThreadState::Blocked {
+                    waiting.state = ThreadState::Ready;
+                    enqueue(waiter);
+                }
+            }
             schedule_from_current(current);
         }
     }
     idle_loop()
+}
+
+pub fn join(thread: ThreadId) -> Option<u64> {
+    unsafe {
+        let current = CURRENT_THREAD;
+        if current == NO_THREAD || current == thread || thread >= MAX_THREADS {
+            return None;
+        }
+        let target = &mut (*(&raw mut THREADS))[thread];
+        if target.state == ThreadState::Exited {
+            target.reapable = true;
+            return Some(target.exit_status);
+        }
+        if target.join_waiter != NO_THREAD {
+            return None;
+        }
+        target.join_waiter = current;
+        block_current();
+        let target = &mut (*(&raw mut THREADS))[thread];
+        if target.state != ThreadState::Exited {
+            return None;
+        }
+        target.reapable = true;
+        Some(target.exit_status)
+    }
 }
 
 pub fn state(thread: ThreadId) -> Option<ThreadState> {
@@ -218,6 +372,13 @@ pub fn state(thread: ThreadId) -> Option<ThreadState> {
         return None;
     }
     unsafe { Some((*(&raw const THREADS))[thread].state) }
+}
+
+pub fn process_id(thread: ThreadId) -> Option<ProcessId> {
+    if thread >= MAX_THREADS {
+        return None;
+    }
+    unsafe { (*(&raw const THREADS))[thread].process }
 }
 
 pub fn syscall_stack_top() -> u64 {
@@ -235,7 +396,38 @@ pub fn save_syscall_state(state: SyscallState) {
         let thread = CURRENT_THREAD;
         if thread != NO_THREAD {
             (*(&raw mut THREADS))[thread].syscall_state = state;
+            let context = &mut (*(&raw mut THREADS))[thread].user_context;
+            context.rsp = state.stack_pointer;
+            context.rip = state.instruction_pointer;
+            context.rflags = state.flags;
         }
+    }
+}
+
+pub fn save_user_context(context: UserContext) {
+    unsafe {
+        let thread = CURRENT_THREAD;
+        if thread != NO_THREAD && (*(&raw const THREADS))[thread].is_user {
+            (*(&raw mut THREADS))[thread].user_context = context;
+        }
+    }
+}
+
+pub fn current_user_context() -> *const UserContext {
+    unsafe {
+        let thread = CURRENT_THREAD;
+        if thread == NO_THREAD || !(*(&raw const THREADS))[thread].is_user {
+            core::ptr::null()
+        } else {
+            &raw const (*(&raw const THREADS))[thread].user_context
+        }
+    }
+}
+
+pub fn current_kernel_stack_top() -> u64 {
+    unsafe {
+        let thread = CURRENT_THREAD;
+        if thread == NO_THREAD { 0 } else { (*(&raw const THREADS))[thread].stack_top }
     }
 }
 
@@ -345,6 +537,12 @@ extern "C" fn thread_trampoline() {
         entry();
     }
     exit_current()
+}
+
+extern "C" fn user_thread_trampoline() {
+    unsafe {
+        crate::arch::resume_user_context(current_user_context());
+    }
 }
 
 extern "C" fn idle_thread() {

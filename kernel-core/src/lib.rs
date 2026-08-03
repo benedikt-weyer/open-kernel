@@ -38,14 +38,14 @@ pub use mouse::{initialize as initialize_mouse, poll as poll_mouse, position as 
 pub use pci::{AhciController, PciDevice, device_count as pci_device_count, enumerate as enumerate_pci, find_ahci_controller};
 pub use paging::{
     DEVICE_WINDOW_BASE, FUTURE_USER_SPACE_BASE, KERNEL_STACK_GUARD_PAGE, PageFlags, PagingConfig,
-    PagingError, allocate_kernel_stack, initialize_virtual_memory, map_user_code_page, map_user_page,
-    map_device_page, map_user_page_with_flags, physical_to_virtual, write_physical_frame,
+    PagingError, allocate_kernel_stack, allocate_user_stack, initialize_virtual_memory, map_user_code_page, map_user_page,
+    is_user_executable, map_device_page, map_user_page_with_flags, physical_to_virtual, write_physical_frame,
     zero_physical_frame,
 };
 pub use scheduler::{
-    TaskEntry, ThreadId, ThreadState, block_current as block_current_thread,
+    Process, ProcessId, TaskEntry, ThreadId, ThreadState, UserContext, block_current as block_current_thread,
     exit_current as exit_current_thread, spawn as spawn_task, start as start_scheduler,
-    state as thread_state, wake as wake_thread, yield_now,
+    process_id as thread_process_id, state as thread_state, wake as wake_thread, yield_now,
 };
 pub use sata::{
     SataBlockDevice, SataError, identify as sata_identify,

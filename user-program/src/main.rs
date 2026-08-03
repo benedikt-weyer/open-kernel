@@ -6,11 +6,12 @@ use core::panic::PanicInfo;
 
 static BANNER: [u8; 37] = *b"OPEN KERNEL USER CONSOLE\r\nTYPE HELP\r\n";
 static PROMPT: [u8; 2] = *b"> ";
-static HELP: [u8; 65] = *b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK\r\n";
+static HELP: &[u8] = b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS\r\n";
 static UNKNOWN: [u8; 17] = *b"UNKNOWN COMMAND\r\n";
 static EXITING: [u8; 9] = *b"GOODBYE\r\n";
-const COMMANDS: [&[u8]; 9] = [
+const COMMANDS: [&[u8]; 10] = [
     b"help", b"clear", b"exit", b"shutdown", b"sata", b"identify", b"read", b"pci", b"lsblk",
+    b"threads",
 ];
 
 #[unsafe(no_mangle)]
@@ -50,6 +51,8 @@ extern "C" fn _start() -> ! {
                 syscall0(13);
             } else if equals(input, length, b"lsblk") {
                 syscall0(14);
+            } else if equals(input, length, b"threads") {
+                user_thread_demo();
             } else if length != 0 {
                 write(&UNKNOWN);
             }
@@ -84,6 +87,28 @@ extern "C" fn _start() -> ! {
             length += 1;
             write(core::slice::from_ref(&character));
         }
+    }
+}
+
+fn user_thread_demo() {
+    let worker = syscall2(15, user_thread_worker as *const () as u64, 0);
+    if worker == u64::MAX {
+        write(b"THREAD CREATE FAILED\r\n");
+        return;
+    }
+    write(b"A\r\n");
+    syscall0(2);
+    write(b"A\r\n");
+    syscall1(17, worker);
+}
+
+extern "C" fn user_thread_worker(_: u64) {
+    write(b"B\r\n");
+    syscall0(2);
+    write(b"B\r\n");
+    syscall1(16, 0);
+    loop {
+        core::hint::spin_loop();
     }
 }
 
@@ -155,6 +180,20 @@ fn syscall1(number: u64, argument: u64) -> u64 {
             "syscall",
             inlateout("rax") number => result,
             in("rdi") argument,
+            clobber_abi("sysv64"),
+        );
+    }
+    result
+}
+
+fn syscall2(number: u64, first: u64, second: u64) -> u64 {
+    let result: u64;
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") number => result,
+            in("rdi") first,
+            in("rsi") second,
             clobber_abi("sysv64"),
         );
     }

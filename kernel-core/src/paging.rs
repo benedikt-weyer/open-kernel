@@ -12,6 +12,8 @@ pub const PAGE_SIZE: u64 = 4096;
 pub const DEVICE_WINDOW_BASE: u64 = 0xFFFF_FF00_0000_0000;
 pub const KERNEL_STACK_GUARD_PAGE: u64 = 0xFFFF_FF10_0000_0000;
 const KERNEL_STACK_PAGES: u64 = 4;
+const USER_STACK_PAGES: u64 = 4;
+const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
 pub const FUTURE_USER_SPACE_BASE: u64 = 0x0000_4000_0000_0000;
 
 #[derive(Clone, Copy)]
@@ -148,6 +150,40 @@ pub fn allocate_kernel_stack(slot: usize) -> Result<u64, PagingError> {
         )?;
     }
     Ok(stack_base + KERNEL_STACK_PAGES * PAGE_SIZE)
+}
+
+pub fn allocate_user_stack(slot: usize) -> Result<u64, PagingError> {
+    // Leave one unmapped page below each downward-growing stack as a guard.
+    let stack_top = USER_SPACE_END - PAGE_SIZE - (slot as u64) * (USER_STACK_PAGES + 1) * PAGE_SIZE;
+    for page in 1..=USER_STACK_PAGES {
+        let address = stack_top - page * PAGE_SIZE;
+        let frame = allocate_physical_frame().ok_or(PagingError::FrameAllocationFailed)?;
+        zero_physical_frame(frame);
+        map_user_page_with_flags(address, frame, PageFlags::UserReadWrite)?;
+    }
+    Ok(stack_top)
+}
+
+pub fn is_user_executable(virtual_address: u64) -> bool {
+    if virtual_address < FUTURE_USER_SPACE_BASE || virtual_address >= USER_SPACE_END {
+        return false;
+    }
+    let indices = [
+        (virtual_address >> 39) & 0x1FF,
+        (virtual_address >> 30) & 0x1FF,
+        (virtual_address >> 21) & 0x1FF,
+        (virtual_address >> 12) & 0x1FF,
+    ];
+    let mut table = unsafe { table_mut(read_cr3() & ENTRY_ADDRESS_MASK) };
+    for index in indices[..3].iter().copied() {
+        let entry = table.0[index as usize];
+        if entry & (PRESENT | USER | HUGE_PAGE) != (PRESENT | USER) {
+            return false;
+        }
+        table = unsafe { table_mut(entry & ENTRY_ADDRESS_MASK) };
+    }
+    let leaf = table.0[indices[3] as usize];
+    leaf & (PRESENT | USER) == (PRESENT | USER) && leaf & NO_EXECUTE == 0
 }
 
 fn map_page(
