@@ -4,6 +4,7 @@ mod arch;
 mod console;
 mod memory;
 mod paging;
+mod scheduler;
 mod serial;
 
 use arch::{Architecture, X86_64};
@@ -21,6 +22,7 @@ pub use paging::{
     DEVICE_WINDOW_BASE, FUTURE_USER_SPACE_BASE, KERNEL_STACK_GUARD_PAGE, PageFlags, PagingConfig,
     PagingError, initialize_virtual_memory, map_user_page,
 };
+pub use scheduler::{TaskEntry, spawn as spawn_task, start as start_scheduler, yield_now};
 
 pub fn halt() -> ! {
     X86_64::halt()

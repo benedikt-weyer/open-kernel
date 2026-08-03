@@ -133,6 +133,7 @@ fn run_framebuffer_console(framebuffer: Framebuffer, bootloader: &[u8], status: 
     );
 
     loop {
+        crate::scheduler::yield_if_preempted();
         let mut redraw = false;
 
         match read_key() {

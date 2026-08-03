@@ -192,10 +192,11 @@ extern "C" fn exception_halt() -> ! {
 fn load_gdt(gdt: &DescriptorTablePointer) {
     unsafe {
         asm!(
-            "lgdt [{gdt}]", "push {code}", "lea {target}, [rip + 2f]", "push {target}", "retfq", "2:",
-            "mov ax, cx", "mov ds, ax", "mov es, ax", "mov ss, ax", "mov fs, ax", "mov gs, ax",
-            gdt = in(reg) gdt, code = const KERNEL_CODE, in("cx") KERNEL_DATA, target = out(reg) _, out("ax") _,
-        );
+        "lgdt [{gdt}]", "push {code}", "lea {target}, [rip + 2f]", "push {target}", "retfq", "2:",
+        "mov ax, cx", "mov ds, ax", "mov es, ax", "mov ss, ax", "mov fs, ax", "mov gs, ax",
+        gdt = in(reg) gdt, code = const KERNEL_CODE, in("cx") KERNEL_DATA, target = out(reg) _, out("ax") _,
+            );
+        crate::scheduler::request_preemption();
     }
 }
 fn initialize_irq_controller() {
