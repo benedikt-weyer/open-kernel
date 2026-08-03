@@ -54,6 +54,13 @@ static mut USER_SYSCALL_STACK_POINTER: u64 = 0;
 static mut USER_SYSCALL_RIP: u64 = 0;
 #[unsafe(no_mangle)]
 static mut USER_SYSCALL_RFLAGS: u64 = 0;
+#[unsafe(no_mangle)]
+static mut USER_SYSCALL_NUMBER: u64 = 0;
+#[unsafe(no_mangle)]
+static mut USER_SYSCALL_POINTER: u64 = 0;
+#[unsafe(no_mangle)]
+static mut USER_SYSCALL_LENGTH: u64 = 0;
+static mut DEMO_SPAWNED: bool = false;
 
 #[repr(C, packed)]
 struct DescriptorTablePointer {
@@ -154,22 +161,31 @@ x86_syscall_stub:
     mov %rsp, USER_SYSCALL_STACK_POINTER(%rip)
     mov %rcx, USER_SYSCALL_RIP(%rip)
     mov %r11, USER_SYSCALL_RFLAGS(%rip)
-    lea SYSCALL_STACK + 16384(%rip), %rsp
+    mov %rax, USER_SYSCALL_NUMBER(%rip)
+    mov %rdi, USER_SYSCALL_POINTER(%rip)
+    mov %rsi, USER_SYSCALL_LENGTH(%rip)
+    call scheduler_syscall_stack_top
+    mov %rax, %rsp
     and $-16, %rsp
     sub $8, %rsp
-    mov %rsi, %rdx
-    mov %rdi, %rsi
-    mov %rax, %rdi
+    call scheduler_save_syscall_state
+    mov USER_SYSCALL_LENGTH(%rip), %rdx
+    mov USER_SYSCALL_POINTER(%rip), %rsi
+    mov USER_SYSCALL_NUMBER(%rip), %rdi
     call syscall_dispatch
     add $8, %rsp
+    pushq %rax
+    call scheduler_current_syscall_state
+    mov %rax, %rdx
+    popq %rax
     pushq $0x1B
-    pushq USER_SYSCALL_STACK_POINTER(%rip)
-    mov USER_SYSCALL_RFLAGS(%rip), %r11
+    pushq (%rdx)
+    mov 16(%rdx), %r11
     and $0xED7, %r11
     or $0x202, %r11
     pushq %r11
     pushq $0x23
-    pushq USER_SYSCALL_RIP(%rip)
+    pushq 8(%rdx)
     iretq
 "#,
     options(att_syntax)
@@ -267,6 +283,25 @@ pub unsafe fn enter_user_mode(entry: u64, stack_pointer: u64) -> ! {
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn scheduler_syscall_stack_top() -> u64 {
+    crate::scheduler::syscall_stack_top()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn scheduler_save_syscall_state() {
+    crate::scheduler::save_syscall_state(crate::scheduler::SyscallState {
+        stack_pointer: unsafe { core::ptr::read_volatile(&raw const USER_SYSCALL_STACK_POINTER) },
+        instruction_pointer: unsafe { core::ptr::read_volatile(&raw const USER_SYSCALL_RIP) },
+        flags: unsafe { core::ptr::read_volatile(&raw const USER_SYSCALL_RFLAGS) },
+    });
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn scheduler_current_syscall_state() -> *const crate::scheduler::SyscallState {
+    crate::scheduler::current_syscall_state()
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64) -> u64 {
     match number {
         1 => syscall_write(pointer, length),
@@ -276,10 +311,38 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64) -> u64 {
         }
         3 => {
             Com1.write(b"open-kernel: user process exited\r\n");
-            X86_64::halt()
+            crate::scheduler::exit_current()
         }
+        4 => syscall_spawn(),
+        5 => syscall_sleep(pointer),
         _ => u64::MAX,
     }
+}
+
+fn syscall_spawn() -> u64 {
+    unsafe {
+        if core::ptr::read_volatile(&raw const DEMO_SPAWNED) {
+            return u64::MAX;
+        }
+        core::ptr::write_volatile(&raw mut DEMO_SPAWNED, true);
+    }
+    crate::scheduler::spawn(crate::user::user_entry)
+        .map(|task| task as u64)
+        .unwrap_or(u64::MAX)
+}
+
+fn syscall_sleep(ticks: u64) -> u64 {
+    let start = timer_ticks();
+    unsafe {
+        asm!("sti", options(nomem, nostack));
+    }
+    while timer_ticks().wrapping_sub(start) < ticks {
+        crate::scheduler::yield_now();
+    }
+    unsafe {
+        asm!("cli", options(nomem, nostack));
+    }
+    0
 }
 
 fn syscall_write(pointer: u64, length: u64) -> u64 {
