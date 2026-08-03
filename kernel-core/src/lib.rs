@@ -36,7 +36,11 @@ pub use paging::{
     map_user_page_with_flags, write_physical_frame, zero_physical_frame,
 };
 pub use scheduler::{TaskEntry, spawn as spawn_task, start as start_scheduler, yield_now};
-pub use storage::{File, FileSystem, InitRamFs, file_count, open as open_file, register_boot_file};
+pub use storage::{
+    File, FileSystem, InitRamFs, RamFs, RamFsError, create as create_ram_file,
+    delete as delete_ram_file, file_count, open as open_file, ram_file_count,
+    read as read_ram_file, register_boot_file, write as write_ram_file,
+};
 pub use xhci::XhciController;
 
 pub fn halt() -> ! {
