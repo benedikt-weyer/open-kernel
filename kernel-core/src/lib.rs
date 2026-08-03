@@ -15,6 +15,7 @@ mod sata;
 mod serial;
 mod storage;
 mod user;
+mod vfs;
 mod xhci;
 
 use arch::{Architecture, X86_64};
@@ -59,6 +60,10 @@ pub use storage::{
     read as read_ram_file, register_boot_file, write as write_ram_file,
 };
 pub use xhci::XhciController;
+pub use vfs::{
+    VfsError, mount_count as vfs_mount_count, mount_initramfs, mounted as vfs_mounted,
+    open as vfs_open,
+};
 
 pub fn halt() -> ! {
     X86_64::halt()

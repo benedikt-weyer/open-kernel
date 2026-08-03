@@ -76,6 +76,11 @@ impl BootInfo {
 }
 
 pub fn boot(info: BootInfo) -> ! {
+    match crate::mount_initramfs() {
+        Ok(()) => Com1.write(b"open-kernel: initramfs mounted at /\r\n"),
+        Err(crate::VfsError::AlreadyMounted) => {}
+        Err(_) => Com1.write(b"open-kernel: initramfs mount failed\r\n"),
+    }
     X86_64::initialize();
     match crate::initialize_sata() {
         Ok(()) => Com1.write(b"open-kernel: SATA initialized\r\n"),
