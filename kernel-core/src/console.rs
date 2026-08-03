@@ -92,7 +92,12 @@ pub fn boot(info: BootInfo) -> ! {
         Err(_) => Com1.write(b"open-kernel: SATA unavailable\r\n"),
     }
     crate::initialize_random();
-    crate::initialize_mouse();
+    // Nothing drains PS/2 aux data: `run_framebuffer_console` (the only
+    // caller of `poll_mouse`) is unreachable because `user::run_demo` ends
+    // in `scheduler::start()`, which diverges into the thread scheduler and
+    // never returns. Enabling the mouse without ever polling it wedges the
+    // shared PS/2 output register with an unread aux byte on first motion,
+    // which blocks all subsequent keyboard scancodes from reaching IRQ1.
     let mut keyboard = Ps2KeyboardDriver::new();
     let _ = keyboard.initialize();
 
