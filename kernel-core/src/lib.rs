@@ -68,6 +68,11 @@ pub fn boot(info: BootInfo) -> ! {
         Display::None => {}
         Display::VgaText => paint_vga(info.bootloader.as_bytes(), info.status),
         Display::Framebuffer(framebuffer) => {
+            serial_write(b"open-kernel: framebuffer ");
+            serial_write_usize(framebuffer.width);
+            serial_write(b"x");
+            serial_write_usize(framebuffer.height);
+            serial_write(b"\r\n");
             paint_framebuffer(framebuffer, info.bootloader.as_bytes(), info.status)
         }
     }
@@ -225,5 +230,26 @@ fn serial_write(text: &[u8]) {
         unsafe {
             asm!("out dx, al", in("dx") 0x3F8_u16, in("al") *byte, options(nomem, nostack));
         }
+    }
+}
+
+fn serial_write_usize(mut value: usize) {
+    let mut digits = [0_u8; 20];
+    let mut length = 0;
+
+    if value == 0 {
+        serial_write(b"0");
+        return;
+    }
+
+    while value != 0 {
+        digits[length] = b'0' + (value % 10) as u8;
+        length += 1;
+        value /= 10;
+    }
+
+    while length != 0 {
+        length -= 1;
+        serial_write(&digits[length..=length]);
     }
 }
