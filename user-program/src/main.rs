@@ -9,6 +9,9 @@ static PROMPT: [u8; 2] = *b"> ";
 static HELP: [u8; 65] = *b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK\r\n";
 static UNKNOWN: [u8; 17] = *b"UNKNOWN COMMAND\r\n";
 static EXITING: [u8; 9] = *b"GOODBYE\r\n";
+const COMMANDS: [&[u8]; 9] = [
+    b"help", b"clear", b"exit", b"shutdown", b"sata", b"identify", b"read", b"pci", b"lsblk",
+];
 
 #[unsafe(no_mangle)]
 extern "C" fn _start() -> ! {
@@ -61,6 +64,19 @@ extern "C" fn _start() -> ! {
             }
             continue;
         }
+        if character == b'\t' {
+            let input_bytes = input.as_ptr().cast::<u8>();
+            if let Some(command) = complete(input_bytes, length) {
+                for (index, byte) in command.iter().enumerate() {
+                    unsafe {
+                        input.as_mut_ptr().cast::<u8>().add(index).write(*byte);
+                    }
+                }
+                write(&command[length..]);
+                length = command.len();
+            }
+            continue;
+        }
         if length < 64 {
             unsafe {
                 input.as_mut_ptr().cast::<u8>().add(length).write(character);
@@ -69,6 +85,31 @@ extern "C" fn _start() -> ! {
             write(core::slice::from_ref(&character));
         }
     }
+}
+
+fn complete(input: *const u8, length: usize) -> Option<&'static [u8]> {
+    let mut match_command = None;
+    for command in COMMANDS {
+        if has_prefix(input, length, command) {
+            if match_command.is_some() {
+                return None;
+            }
+            match_command = Some(command);
+        }
+    }
+    match_command.filter(|command| command.len() > length)
+}
+
+fn has_prefix(input: *const u8, length: usize, command: &[u8]) -> bool {
+    if length > command.len() {
+        return false;
+    }
+    for index in 0..length {
+        if unsafe { input.add(index).read() } != command[index] {
+            return false;
+        }
+    }
+    true
 }
 
 fn equals(input: *const u8, length: usize, expected: &[u8]) -> bool {
