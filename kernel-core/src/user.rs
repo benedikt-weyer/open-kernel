@@ -93,11 +93,14 @@ pub fn run_demo() -> Result<(), ElfError> {
         CURRENT_DIRECTORY[0] = b'/';
         CURRENT_DIRECTORY_LENGTH = 1;
         EXECUTABLE_ENTRY = loaded.entry;
-        PROCESS_STATE[0] = ProcessUserState {
-            executable_entry: loaded.entry,
-            cwd: [b'/', 0, 0, 0, 0],
-            ..ProcessUserState::EMPTY
-        };
+        PROCESS_STATE[0].heap_break = USER_HEAP_BASE;
+        PROCESS_STATE[0].heap_mapped_end = USER_HEAP_BASE;
+        PROCESS_STATE[0].cwd[0] = b'/';
+        PROCESS_STATE[0].cwd_length = 1;
+        PROCESS_STATE[0].executable_entry = loaded.entry;
+        for index in 0..MAX_FDS {
+            core::ptr::write_volatile(&raw mut PROCESS_STATE[0].descriptors[index], Descriptor::EMPTY);
+        }
     }
     loaded.stack_pointer = initialize_process_stack(loaded.stack_pointer, b"init", &[]);
     crate::scheduler::initialize_user_process();
@@ -159,11 +162,15 @@ pub(crate) fn spawn(path: &[u8], argv: &[&[u8]]) -> u64 {
         return u64::MAX;
     };
     unsafe {
-        PROCESS_STATE[process.saturating_sub(1).min(7)] = ProcessUserState {
-            executable_entry: 0,
-            cwd: [b'/', 0, 0, 0, 0],
-            ..ProcessUserState::EMPTY
-        };
+        let state = &mut PROCESS_STATE[process.saturating_sub(1).min(7)];
+        state.heap_break = USER_HEAP_BASE;
+        state.heap_mapped_end = USER_HEAP_BASE;
+        state.cwd[0] = b'/';
+        state.cwd_length = 1;
+        state.executable_entry = 0;
+        for index in 0..MAX_FDS {
+            core::ptr::write_volatile(&raw mut state.descriptors[index], Descriptor::EMPTY);
+        }
     }
     let Ok(loaded) = crate::load_user_elf_into(image, address_space, process) else {
         return u64::MAX;
