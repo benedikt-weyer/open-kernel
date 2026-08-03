@@ -51,6 +51,32 @@ impl Descriptor {
 }
 static mut FILE_DESCRIPTORS: [Descriptor; MAX_FDS] = [Descriptor::EMPTY; MAX_FDS];
 
+#[derive(Clone, Copy)]
+struct ProcessUserState {
+    heap_break: u64,
+    heap_mapped_end: u64,
+    cwd: [u8; CURRENT_DIRECTORY_MAX],
+    cwd_length: usize,
+    executable_entry: u64,
+    descriptors: [Descriptor; MAX_FDS],
+}
+impl ProcessUserState {
+    const EMPTY: Self = Self {
+        heap_break: USER_HEAP_BASE, heap_mapped_end: USER_HEAP_BASE,
+        cwd: [0; CURRENT_DIRECTORY_MAX], cwd_length: 1, executable_entry: 0,
+        descriptors: [Descriptor::EMPTY; MAX_FDS],
+    };
+}
+static mut PROCESS_STATE: [ProcessUserState; 8] = [ProcessUserState::EMPTY; 8];
+
+fn current_state_slot() -> usize {
+    crate::current_thread_id()
+        .and_then(crate::thread_process_id)
+        .unwrap_or(1)
+        .saturating_sub(1)
+        .min(7)
+}
+
 pub fn run_demo() -> Result<(), ElfError> {
     let image = vfs_open("/init").ok_or(ElfError::InvalidHeader)?;
     let mut loaded = load_user_elf(image)?;
@@ -67,6 +93,11 @@ pub fn run_demo() -> Result<(), ElfError> {
         CURRENT_DIRECTORY[0] = b'/';
         CURRENT_DIRECTORY_LENGTH = 1;
         EXECUTABLE_ENTRY = loaded.entry;
+        PROCESS_STATE[0] = ProcessUserState {
+            executable_entry: loaded.entry,
+            cwd: [b'/', 0, 0, 0, 0],
+            ..ProcessUserState::EMPTY
+        };
     }
     loaded.stack_pointer = initialize_process_stack(loaded.stack_pointer, b"init", &[]);
     crate::scheduler::initialize_user_process();
@@ -77,7 +108,7 @@ pub fn run_demo() -> Result<(), ElfError> {
 
 pub fn executable_metadata() -> ExecutableMetadata {
     ExecutableMetadata {
-        entry: unsafe { EXECUTABLE_ENTRY },
+        entry: unsafe { (*(&raw const PROCESS_STATE))[current_state_slot()].executable_entry },
         path: "/init",
     }
 }
@@ -93,8 +124,9 @@ pub(crate) fn open(path: &[u8], flags: u64) -> u64 {
         return u64::MAX;
     }
     unsafe {
+        let slot = current_state_slot();
         for index in 0..MAX_FDS {
-            let descriptor = &mut (*(&raw mut FILE_DESCRIPTORS))[index];
+            let descriptor = &mut (*(&raw mut PROCESS_STATE))[slot].descriptors[index];
             if descriptor.kind == DescriptorKind::Empty {
                 if path.len() >= FD_PATH_LENGTH {
                     return u64::MAX;
@@ -126,9 +158,17 @@ pub(crate) fn spawn(path: &[u8], argv: &[&[u8]]) -> u64 {
     let Some(process) = crate::create_process(address_space) else {
         return u64::MAX;
     };
+    unsafe {
+        PROCESS_STATE[process.saturating_sub(1).min(7)] = ProcessUserState {
+            executable_entry: 0,
+            cwd: [b'/', 0, 0, 0, 0],
+            ..ProcessUserState::EMPTY
+        };
+    }
     let Ok(loaded) = crate::load_user_elf_into(image, address_space, process) else {
         return u64::MAX;
     };
+    unsafe { PROCESS_STATE[process.saturating_sub(1).min(7)].executable_entry = loaded.entry };
     let previous_address_space = crate::active_address_space();
     unsafe { crate::switch_address_space(address_space) };
     let stack_pointer = initialize_process_stack(loaded.stack_pointer, path.as_bytes(), argv);
@@ -148,9 +188,10 @@ pub(crate) fn chdir(path: &[u8]) -> u64 {
         return u64::MAX;
     }
     unsafe {
-        CURRENT_DIRECTORY_LENGTH = path.len();
+        let state = &mut (*(&raw mut PROCESS_STATE))[current_state_slot()];
+        state.cwd_length = path.len();
         for (index, byte) in path.as_bytes().iter().enumerate() {
-            CURRENT_DIRECTORY[index] = *byte;
+            state.cwd[index] = *byte;
         }
     }
     0
@@ -158,14 +199,15 @@ pub(crate) fn chdir(path: &[u8]) -> u64 {
 
 pub(crate) fn getcwd(output: &mut [u8]) -> u64 {
     unsafe {
-        if output.len() < CURRENT_DIRECTORY_LENGTH + 1 {
+        let state = &(*(&raw const PROCESS_STATE))[current_state_slot()];
+        if output.len() < state.cwd_length + 1 {
             return u64::MAX;
         }
-        for index in 0..CURRENT_DIRECTORY_LENGTH {
-            output[index] = CURRENT_DIRECTORY[index];
+        for index in 0..state.cwd_length {
+            output[index] = state.cwd[index];
         }
-        output[CURRENT_DIRECTORY_LENGTH] = 0;
-        CURRENT_DIRECTORY_LENGTH as u64
+        output[state.cwd_length] = 0;
+        state.cwd_length as u64
     }
 }
 
@@ -177,7 +219,7 @@ pub(crate) fn executable_info(output: &mut [u8]) -> u64 {
         output[index] = *byte;
     }
     output[EXECUTABLE_PATH.len()] = 0;
-    unsafe { EXECUTABLE_ENTRY }
+    unsafe { (*(&raw const PROCESS_STATE))[current_state_slot()].executable_entry }
 }
 
 pub(crate) fn read(fd: u64, output: &mut [u8]) -> u64 {
@@ -185,7 +227,7 @@ pub(crate) fn read(fd: u64, output: &mut [u8]) -> u64 {
         return u64::MAX;
     };
     unsafe {
-        let descriptor = &mut (*(&raw mut FILE_DESCRIPTORS))[index];
+        let descriptor = &mut (*(&raw mut PROCESS_STATE))[current_state_slot()].descriptors[index];
         let Ok(path) = core::str::from_utf8(&descriptor.path[..descriptor.path_length]) else {
             return u64::MAX;
         };
@@ -222,7 +264,7 @@ pub(crate) fn write(fd: u64, input: &[u8]) -> u64 {
         return u64::MAX;
     };
     unsafe {
-        let descriptor = &mut (*(&raw mut FILE_DESCRIPTORS))[index];
+        let descriptor = &mut (*(&raw mut PROCESS_STATE))[current_state_slot()].descriptors[index];
         if descriptor.kind != DescriptorKind::File || !descriptor.writable {
             return u64::MAX;
         }
@@ -242,7 +284,7 @@ pub(crate) fn close(fd: u64) -> u64 {
         return u64::MAX;
     };
     unsafe {
-        let descriptor = &mut (*(&raw mut FILE_DESCRIPTORS))[index];
+        let descriptor = &mut (*(&raw mut PROCESS_STATE))[current_state_slot()].descriptors[index];
         if descriptor.kind == DescriptorKind::Empty {
             return u64::MAX;
         }
@@ -259,7 +301,7 @@ pub(crate) fn stat(fd: u64, output: &mut [u8]) -> u64 {
         return u64::MAX;
     };
     unsafe {
-        let descriptor = &(*(&raw const FILE_DESCRIPTORS))[index];
+        let descriptor = &(*(&raw const PROCESS_STATE))[current_state_slot()].descriptors[index];
         let Ok(path) = core::str::from_utf8(&descriptor.path[..descriptor.path_length]) else {
             return u64::MAX;
         };
@@ -287,7 +329,7 @@ pub(crate) fn seek(fd: u64, offset: i64, whence: u64) -> u64 {
         return u64::MAX;
     };
     unsafe {
-        let descriptor = &mut (*(&raw mut FILE_DESCRIPTORS))[index];
+        let descriptor = &mut (*(&raw mut PROCESS_STATE))[current_state_slot()].descriptors[index];
         if descriptor.kind == DescriptorKind::Empty {
             return u64::MAX;
         }
@@ -312,7 +354,8 @@ pub(crate) fn seek(fd: u64, offset: i64, whence: u64) -> u64 {
 
 pub(crate) fn brk(requested_break: u64) -> u64 {
     unsafe {
-        let current_break = USER_HEAP_BREAK;
+        let state = &mut (*(&raw mut PROCESS_STATE))[current_state_slot()];
+        let current_break = state.heap_break;
         if requested_break == 0 {
             return current_break;
         }
@@ -322,11 +365,11 @@ pub(crate) fn brk(requested_break: u64) -> u64 {
         if requested_break <= current_break {
             // Keep existing mappings; reducing the logical break is safe and lets the
             // allocator reuse the range without needing page-table reclamation yet.
-            USER_HEAP_BREAK = requested_break;
+            state.heap_break = requested_break;
             return requested_break;
         }
 
-        let mapped_end = USER_HEAP_MAPPED_END;
+        let mapped_end = state.heap_mapped_end;
         let required_end = match requested_break.checked_add(PAGE_SIZE - 1) {
             Some(value) => value & !(PAGE_SIZE - 1),
             None => return u64::MAX,
@@ -342,21 +385,22 @@ pub(crate) fn brk(requested_break: u64) -> u64 {
             }
             page += PAGE_SIZE;
         }
-        USER_HEAP_BREAK = requested_break;
-        USER_HEAP_MAPPED_END = required_end;
+        state.heap_break = requested_break;
+        state.heap_mapped_end = required_end;
         requested_break
     }
 }
 
 fn resolve_path(path: &[u8]) -> Option<&'static str> {
     unsafe {
+        let state = &(*(&raw const PROCESS_STATE))[current_state_slot()];
         let mut length = 0;
         if path.first() != Some(&b'/') {
-            if CURRENT_DIRECTORY_LENGTH + 1 + path.len() >= FD_PATH_LENGTH {
+            if state.cwd_length + 1 + path.len() >= FD_PATH_LENGTH {
                 return None;
             }
-            for index in 0..CURRENT_DIRECTORY_LENGTH {
-                RESOLVED_PATH[length] = CURRENT_DIRECTORY[index];
+            for index in 0..state.cwd_length {
+                RESOLVED_PATH[length] = state.cwd[index];
                 length += 1;
             }
             if length != 1 {
