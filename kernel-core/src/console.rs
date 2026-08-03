@@ -19,6 +19,8 @@ const USER_CONSOLE_CHARACTER_WIDTH: usize = 12;
 static mut USER_FRAMEBUFFER: Option<Framebuffer> = None;
 static mut USER_CURSOR_X: usize = USER_CONSOLE_MARGIN;
 static mut USER_CURSOR_Y: usize = USER_CONSOLE_MARGIN;
+static mut USER_CURSOR_VISIBLE: bool = false;
+static mut USER_CURSOR_BLINK_TICKS: u8 = 0;
 
 pub enum Display {
     None,
@@ -138,6 +140,7 @@ pub fn user_console_write(text: &[u8]) {
     let Some(framebuffer) = (unsafe { core::ptr::read_volatile(&raw const USER_FRAMEBUFFER) }) else {
         return;
     };
+    hide_user_cursor(&framebuffer);
     for byte in text {
         match *byte {
             b'\r' => {}
@@ -166,12 +169,14 @@ pub fn user_console_write(text: &[u8]) {
             }
         }
     }
+    show_user_cursor(&framebuffer);
 }
 
 pub fn user_console_clear() {
     let Some(framebuffer) = (unsafe { core::ptr::read_volatile(&raw const USER_FRAMEBUFFER) }) else {
         return;
     };
+    hide_user_cursor(&framebuffer);
     for row in 0..framebuffer.height {
         for column in 0..framebuffer.width {
             put_framebuffer_pixel(&framebuffer, column, row, USER_CONSOLE_BACKGROUND);
@@ -181,14 +186,35 @@ pub fn user_console_clear() {
         core::ptr::write_volatile(&raw mut USER_CURSOR_X, USER_CONSOLE_MARGIN);
         core::ptr::write_volatile(&raw mut USER_CURSOR_Y, USER_CONSOLE_MARGIN);
     }
+    show_user_cursor(&framebuffer);
+}
+
+pub fn user_console_tick() {
+    let Some(framebuffer) = (unsafe { core::ptr::read_volatile(&raw const USER_FRAMEBUFFER) }) else {
+        return;
+    };
+    unsafe {
+        USER_CURSOR_BLINK_TICKS = USER_CURSOR_BLINK_TICKS.wrapping_add(1);
+        if USER_CURSOR_BLINK_TICKS < 50 {
+            return;
+        }
+        USER_CURSOR_BLINK_TICKS = 0;
+    }
+    if unsafe { USER_CURSOR_VISIBLE } {
+        hide_user_cursor(&framebuffer);
+    } else {
+        show_user_cursor(&framebuffer);
+    }
 }
 
 pub fn user_console_backspace() {
     let Some(framebuffer) = (unsafe { core::ptr::read_volatile(&raw const USER_FRAMEBUFFER) }) else {
         return;
     };
+    hide_user_cursor(&framebuffer);
     let x = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_X) };
     if x <= USER_CONSOLE_MARGIN {
+        show_user_cursor(&framebuffer);
         return;
     }
     let previous_x = x - USER_CONSOLE_CHARACTER_WIDTH;
@@ -206,10 +232,36 @@ pub fn user_console_backspace() {
     unsafe {
         core::ptr::write_volatile(&raw mut USER_CURSOR_X, previous_x);
     }
+    show_user_cursor(&framebuffer);
 }
 
 pub fn poll_user_key() -> Option<u8> {
     decode_scancode(crate::arch::take_keyboard_scancode()?)
+}
+
+fn show_user_cursor(framebuffer: &Framebuffer) {
+    let x = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_X) };
+    let y = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_Y) };
+    for pixel_y in USER_CONSOLE_LINE_HEIGHT - 2..USER_CONSOLE_LINE_HEIGHT {
+        for pixel_x in 0..USER_CONSOLE_CHARACTER_WIDTH {
+            put_framebuffer_pixel(framebuffer, x + pixel_x, y + pixel_y, USER_CONSOLE_FOREGROUND);
+        }
+    }
+    unsafe { core::ptr::write_volatile(&raw mut USER_CURSOR_VISIBLE, true) };
+}
+
+fn hide_user_cursor(framebuffer: &Framebuffer) {
+    if !unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_VISIBLE) } {
+        return;
+    }
+    let x = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_X) };
+    let y = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_Y) };
+    for pixel_y in USER_CONSOLE_LINE_HEIGHT - 2..USER_CONSOLE_LINE_HEIGHT {
+        for pixel_x in 0..USER_CONSOLE_CHARACTER_WIDTH {
+            put_framebuffer_pixel(framebuffer, x + pixel_x, y + pixel_y, USER_CONSOLE_BACKGROUND);
+        }
+    }
+    unsafe { core::ptr::write_volatile(&raw mut USER_CURSOR_VISIBLE, false) };
 }
 
 fn enable_user_console(framebuffer: Framebuffer) {

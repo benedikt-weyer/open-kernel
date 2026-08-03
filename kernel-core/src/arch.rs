@@ -819,6 +819,7 @@ extern "C" fn irq_dispatch(vector: u64) {
                 core::ptr::write_volatile(&raw mut TIMER_TICKS, next_ticks);
                 wake_expired_sleepers(next_ticks);
                 wake_expired_futexes(next_ticks);
+                crate::console::user_console_tick();
             }
             33 => {
                 core::ptr::write_volatile(&raw mut KEYBOARD_SCANCODE, inb(0x60));
