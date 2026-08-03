@@ -3,6 +3,9 @@ name = "user-program"
 version = "0.1.0"
 edition = "2024"
 
+[dependencies]
+openkernel-rt = { path = "../openkernel-rt" }
+
 [[bin]]
 name = "user-program"
 path = "src/main.rs"

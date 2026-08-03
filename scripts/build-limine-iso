@@ -16,15 +16,16 @@ KERNEL="$BUILD_DIR/open-kernel-limine.elf"
 USER_PROGRAM="$BUILD_DIR/init.elf"
 ISO="$BUILD_DIR/open-kernel-limine.iso"
 USER_MANIFEST="$ROOT_DIR/user-program/Cargo.toml"
-USER_BINARY="$ROOT_DIR/target/release/user-program"
+USER_BINARY="$ROOT_DIR/target/x86_64-unknown-openkernel/release/user-program"
 OPENKERNEL_STD="${OPENKERNEL_STD:-1}"
 OPENKERNEL_RUSTC="${OPENKERNEL_RUSTC:-/home/benedikt/Git/forks/rust-open-kernel/build/x86_64-unknown-linux-gnu/stage1/bin/rustc}"
 
-if [ "$OPENKERNEL_STD" = 1 ]; then
-    if [ ! -x "$OPENKERNEL_RUSTC" ]; then
-        printf 'OpenKernel compiler not found: %s\n' "$OPENKERNEL_RUSTC" >&2
-        exit 1
-    fi
+# The console is a std binary now, so it always needs the OpenKernel stage1
+# compiler and its `std` port, regardless of OPENKERNEL_STD (which only
+# gates whether the optional std-smoke module is also built).
+if [ ! -x "$OPENKERNEL_RUSTC" ]; then
+    printf 'OpenKernel compiler not found: %s\n' "$OPENKERNEL_RUSTC" >&2
+    exit 1
 fi
 
 for command in cargo limine ld xorriso; do
@@ -44,13 +45,12 @@ cargo rustc --manifest-path "$ROOT_DIR/limine-adapter/Cargo.toml" --release \
     -C no-redzone=yes -C linker=ld -C link-arg=-melf_x86_64 \
     -C link-arg=-T"$ROOT_DIR/linker-limine.ld" -C link-arg=-nostdlib \
     -C link-arg=-z -C link-arg=max-page-size=0x1000
-cargo clean --manifest-path "$ROOT_DIR/user-program/Cargo.toml" -p user-program
-cargo rustc --manifest-path "$USER_MANIFEST" --release -- \
-        -C relocation-model=static -C code-model=small -C linker=ld -C link-arg=-melf_x86_64 \
-        -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib \
-        -C link-arg=-z -C link-arg=max-page-size=0x1000
+(cd "$RUST_FORK" && BOOTSTRAP_SKIP_TARGET_SANITY=1 ./x build library/std --target x86_64-unknown-openkernel)
+cargo clean --manifest-path "$USER_MANIFEST" -p user-program
+RUSTC="$OPENKERNEL_RUSTC" cargo rustc --manifest-path "$USER_MANIFEST" --release \
+    --target x86_64-unknown-openkernel -- -C relocation-model=static -C code-model=small -C linker=ld \
+    -C link-arg=-melf_x86_64 -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib
 if [ "$OPENKERNEL_STD" = 1 ]; then
-    (cd "$RUST_FORK" && BOOTSTRAP_SKIP_TARGET_SANITY=1 ./x build library/std --target x86_64-unknown-openkernel)
     cargo clean --manifest-path "$ROOT_DIR/std-program/Cargo.toml" -p openkernel-std-smoke
     RUSTC="$OPENKERNEL_RUSTC" cargo rustc --manifest-path "$ROOT_DIR/std-program/Cargo.toml" --release \
         --target x86_64-unknown-openkernel -- -C relocation-model=static -C code-model=small -C linker=ld \
