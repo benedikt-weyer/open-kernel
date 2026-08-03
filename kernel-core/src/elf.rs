@@ -1,6 +1,7 @@
 use crate::{
     FUTURE_USER_SPACE_BASE, PAGE_SIZE, PageFlags, PagingError, allocate_physical_frame,
-    allocate_user_stack, map_user_page_with_flags, write_physical_frame, zero_physical_frame,
+    allocate_user_stack_in, map_user_page_in,
+    write_physical_frame, zero_physical_frame,
 };
 
 const ELF_HEADER_SIZE: usize = 64;
@@ -35,6 +36,15 @@ impl From<PagingError> for ElfError {
 }
 
 pub fn load_user_elf(image: &[u8]) -> Result<LoadedImage, ElfError> {
+    load_user_elf_into(image, crate::active_address_space(), 0)
+}
+
+/// Loads an ELF into an address space which need not be the active CR3.
+pub fn load_user_elf_into(
+    image: &[u8],
+    address_space: u64,
+    stack_slot: usize,
+) -> Result<LoadedImage, ElfError> {
     if image.len() < ELF_HEADER_SIZE
         || image[..4] != *b"\x7FELF"
         || image[4] != 2
@@ -106,7 +116,7 @@ pub fn load_user_elf(image: &[u8]) -> Result<LoadedImage, ElfError> {
         loop {
             let frame = allocate_physical_frame().ok_or(PagingError::FrameAllocationFailed)?;
             zero_physical_frame(frame);
-            map_user_page_with_flags(page, frame, page_flags)?;
+            map_user_page_in(address_space, page, frame, page_flags)?;
 
             let copy_start = page.max(virtual_address);
             let copy_end = (page + PAGE_SIZE).min(virtual_address + file_size);
@@ -128,7 +138,7 @@ pub fn load_user_elf(image: &[u8]) -> Result<LoadedImage, ElfError> {
     if !entry_is_executable {
         return Err(ElfError::NoExecutableSegment);
     }
-    let stack_top = allocate_user_stack(0)?;
+    let stack_top = allocate_user_stack_in(address_space, stack_slot)?;
     Ok(LoadedImage {
         entry,
         // `_start` is a Rust function entry point, so emulate a normal call:

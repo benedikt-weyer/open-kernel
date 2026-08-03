@@ -201,13 +201,17 @@ pub fn release_kernel_stack(slot: usize) {
 }
 
 pub fn allocate_user_stack(slot: usize) -> Result<u64, PagingError> {
+    allocate_user_stack_in(active_address_space(), slot)
+}
+
+pub fn allocate_user_stack_in(address_space: u64, slot: usize) -> Result<u64, PagingError> {
     // Leave one unmapped page below each downward-growing stack as a guard.
     let stack_top = USER_SPACE_END - PAGE_SIZE - (slot as u64) * (USER_STACK_PAGES + 1) * PAGE_SIZE;
     for page in 1..=USER_STACK_PAGES {
         let address = stack_top - page * PAGE_SIZE;
         let frame = allocate_physical_frame().ok_or(PagingError::FrameAllocationFailed)?;
         zero_physical_frame(frame);
-        map_user_page_with_flags(address, frame, PageFlags::UserReadWrite)?;
+        map_user_page_in(address_space, address, frame, PageFlags::UserReadWrite)?;
     }
     Ok(stack_top)
 }
