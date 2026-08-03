@@ -170,6 +170,7 @@ fn run_framebuffer_console(
                 input_length -= 1;
                 redraw = true;
             }
+            Some(8) => {}
             Some(character) if input_length < input.len() => {
                 input[input_length] = character;
                 input_length += 1;

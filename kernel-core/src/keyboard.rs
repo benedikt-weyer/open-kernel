@@ -2,7 +2,6 @@ use crate::{
     arch::take_keyboard_scancode,
     drivers::{Driver, DriverError},
 };
-use core::arch::asm;
 pub struct Ps2KeyboardDriver {
     initialized: bool,
 }
@@ -14,20 +13,7 @@ impl Ps2KeyboardDriver {
         if !self.initialized {
             return None;
         }
-        take_keyboard_scancode().or_else(|| {
-            let status: u8;
-            unsafe {
-                asm!("in al, dx", in("dx") 0x64_u16, out("al") status, options(nomem, nostack));
-            }
-            if status & 1 == 0 {
-                return None;
-            }
-            let scancode: u8;
-            unsafe {
-                asm!("in al, dx", in("dx") 0x60_u16, out("al") scancode, options(nomem, nostack));
-            }
-            Some(scancode)
-        })
+        take_keyboard_scancode()
     }
 }
 impl Driver for Ps2KeyboardDriver {
