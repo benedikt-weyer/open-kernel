@@ -45,7 +45,7 @@ const SERVICES: &[Service] = &[
     Service {
         name: "console",
         path: "/console",
-        argv: &["0"],
+        argv: &["tty:0"],
         depends_on: &["selftest"],
         kind: Kind::Daemon,
         restart: Restart::Always,
@@ -53,7 +53,7 @@ const SERVICES: &[Service] = &[
     Service {
         name: "console-tty2",
         path: "/console",
-        argv: &["1"],
+        argv: &["tty:1"],
         depends_on: &["selftest"],
         kind: Kind::Daemon,
         restart: Restart::Always,

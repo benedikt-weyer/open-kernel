@@ -19,8 +19,8 @@ const USER_CONSOLE_CHARACTER_WIDTH: usize = 12;
 /// framebuffer, cursor, and pending keypress; only the active one is ever
 /// blitted onto the real hardware framebuffer.
 pub const TTY_COUNT: usize = 3;
-const MAX_TTY_WIDTH: usize = 1024;
-const MAX_TTY_HEIGHT: usize = 768;
+const MAX_TTY_WIDTH: usize = 1280;
+const MAX_TTY_HEIGHT: usize = 800;
 const TTY_BUFFER_BYTES: usize = MAX_TTY_WIDTH * MAX_TTY_HEIGHT * 4;
 
 /// Scancodes for the modifier and function keys used by the Ctrl+Alt+Fn

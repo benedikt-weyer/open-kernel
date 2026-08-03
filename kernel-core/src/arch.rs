@@ -675,10 +675,18 @@ fn syscall_process_spawn(path: u64, length: u64, argv: u64) -> u64 {
     let Some(bytes) = user_bytes(path, length, 64) else {
         return u64::MAX;
     };
-    let mut arguments = [b"" as &[u8]; 4];
+    // Each argument is copied into a kernel-owned buffer rather than kept
+    // as a slice into the caller's address space: `user::spawn` switches
+    // to the new process's address space before it reads argv (to write
+    // the strings onto the new stack), and by then a raw pointer into the
+    // caller's memory would be reinterpreted against the wrong page
+    // tables. Copying now, while the caller's mapping is still active,
+    // avoids that.
+    let mut argument_buffers = [[0_u8; 64]; 4];
+    let mut argument_lengths = [0_usize; 4];
     let mut count = 0;
     if argv != 0 {
-        for index in 0..arguments.len() {
+        for index in 0..argument_buffers.len() {
             let Some(pointer_bytes) = user_bytes(argv + (index * 8) as u64, 8, 8) else {
                 return u64::MAX;
             };
@@ -688,9 +696,20 @@ fn syscall_process_spawn(path: u64, length: u64, argv: u64) -> u64 {
             if pointer == 0 { break; }
             let Some(value) = user_bytes(pointer, 64, 64) else { return u64::MAX; };
             let Some(length) = value.iter().position(|byte| *byte == 0) else { return u64::MAX; };
-            arguments[count] = &value[..length];
+            // A manual loop rather than `copy_from_slice`: with a
+            // runtime-determined `length` it can't be unrolled at compile
+            // time, so it would lower to a `memcpy` call this
+            // freestanding, `-nostdlib` binary has no libc to provide.
+            for byte in 0..length {
+                argument_buffers[count][byte] = value[byte];
+            }
+            argument_lengths[count] = length;
             count += 1;
         }
+    }
+    let mut arguments = [b"" as &[u8]; 4];
+    for index in 0..count {
+        arguments[index] = &argument_buffers[index][..argument_lengths[index]];
     }
     crate::user::spawn(bytes, &arguments[..count])
 }
