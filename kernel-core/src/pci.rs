@@ -49,9 +49,7 @@ pub fn device_count() -> usize {
 pub fn find_ahci_controller() -> Option<AhciController> {
     let mut controller = None;
     enumerate(|device| {
-        if controller.is_none()
-            && (device.class, device.subclass, device.programming_interface) == (0x01, 0x06, 0x01)
-        {
+        if controller.is_none() && (device.class, device.subclass) == (0x01, 0x06) {
             let abar = read_config(device.bus, device.device, device.function, 0x24) & !0xF;
             if abar != 0 {
                 controller = Some(AhciController {
@@ -62,6 +60,17 @@ pub fn find_ahci_controller() -> Option<AhciController> {
         }
     });
     controller
+}
+
+pub fn enable_memory_and_bus_master(device: PciDevice) {
+    let command = read_config(device.bus, device.device, device.function, 0x04);
+    write_config(
+        device.bus,
+        device.device,
+        device.function,
+        0x04,
+        command | (1 << 1) | (1 << 2),
+    );
 }
 
 fn read_device(bus: u8, device: u8, function: u8) -> Option<PciDevice> {
@@ -88,15 +97,27 @@ fn is_multifunction(bus: u8, device: u8) -> bool {
 }
 
 fn read_config(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
-    let address = 0x8000_0000
-        | (u32::from(bus) << 16)
-        | (u32::from(device) << 11)
-        | (u32::from(function) << 8)
-        | u32::from(offset & 0xFC);
+    let address = config_address(bus, device, function, offset);
     unsafe {
         asm!("out dx, eax", in("dx") CONFIG_ADDRESS, in("eax") address, options(nostack));
         let value: u32;
         asm!("in eax, dx", in("dx") CONFIG_DATA, out("eax") value, options(nostack));
         value
     }
+}
+
+fn write_config(bus: u8, device: u8, function: u8, offset: u8, value: u32) {
+    let address = config_address(bus, device, function, offset);
+    unsafe {
+        asm!("out dx, eax", in("dx") CONFIG_ADDRESS, in("eax") address, options(nostack));
+        asm!("out dx, eax", in("dx") CONFIG_DATA, in("eax") value, options(nostack));
+    }
+}
+
+fn config_address(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
+    0x8000_0000
+        | (u32::from(bus) << 16)
+        | (u32::from(device) << 11)
+        | (u32::from(function) << 8)
+        | u32::from(offset & 0xFC)
 }

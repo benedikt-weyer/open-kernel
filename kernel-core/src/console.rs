@@ -77,7 +77,13 @@ impl BootInfo {
 
 pub fn boot(info: BootInfo) -> ! {
     X86_64::initialize();
-    let _ = crate::initialize_sata();
+    match crate::initialize_sata() {
+        Ok(()) => Com1.write(b"open-kernel: SATA initialized\r\n"),
+        Err(crate::SataError::NotFound) => Com1.write(b"open-kernel: AHCI not found\r\n"),
+        Err(crate::SataError::NoDevice) => Com1.write(b"open-kernel: SATA port not found\r\n"),
+        Err(crate::SataError::Timeout) => Com1.write(b"open-kernel: SATA reset timed out\r\n"),
+        Err(_) => Com1.write(b"open-kernel: SATA unavailable\r\n"),
+    }
     crate::initialize_mouse();
     let mut keyboard = Ps2KeyboardDriver::new();
     let _ = keyboard.initialize();

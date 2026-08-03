@@ -9,7 +9,6 @@ use crate::drivers::{BlockDevice, BlockDeviceError, Driver, DriverError};
 const HBA_GHC: usize = 0x04;
 const HBA_PI: usize = 0x0C;
 const HBA_GHC_AE: u32 = 1 << 31;
-const HBA_GHC_HR: u32 = 1;
 const PORT_BASE: usize = 0x100;
 const PORT_SIZE: usize = 0x80;
 const PORT_CLB: usize = 0x00;
@@ -49,6 +48,7 @@ struct Controller {
 }
 
 static mut CONTROLLER: Option<Controller> = None;
+static mut IDENTIFY_MODEL: [u8; 40] = [b' '; 40];
 
 pub struct SataBlockDevice;
 
@@ -92,6 +92,7 @@ pub fn initialize() -> Result<(), SataError> {
     let Some(ahci) = crate::pci::find_ahci_controller() else {
         return Err(SataError::NotFound);
     };
+    crate::pci::enable_memory_and_bus_master(ahci.device);
     let bar = ahci.abar;
     map_device_page(AHCI_MMIO_BASE, bar).map_err(|_| SataError::AllocationFailed)?;
     map_device_page(AHCI_MMIO_BASE + PAGE_SIZE, bar + PAGE_SIZE)
@@ -108,18 +109,24 @@ pub fn is_available() -> bool {
     unsafe { core::ptr::read_volatile(&raw const CONTROLLER).is_some() }
 }
 
-pub fn identify() -> Result<[u8; 40], SataError> {
+pub fn identify() -> Result<(), SataError> {
     let controller = unsafe { CONTROLLER.ok_or(SataError::NotFound)? };
     unsafe {
         issue_command(controller, ATA_IDENTIFY, 0)?;
         let source = physical_to_virtual(controller.data_buffer);
-        let mut model = [b' '; 40];
         for index in 0..20 {
-            model[index * 2] = read_volatile(source.add(54 + index * 2 + 1));
-            model[index * 2 + 1] = read_volatile(source.add(54 + index * 2));
+            IDENTIFY_MODEL[index * 2] = read_volatile(source.add(54 + index * 2 + 1));
+            IDENTIFY_MODEL[index * 2 + 1] = read_volatile(source.add(54 + index * 2));
         }
-        Ok(model)
+        Ok(())
     }
+}
+
+pub fn identify_model_byte(index: usize) -> u8 {
+    if index >= 40 {
+        return b' ';
+    }
+    unsafe { core::ptr::read_volatile((&raw const IDENTIFY_MODEL).cast::<u8>().add(index)) }
 }
 
 pub fn read_first_sector() -> Result<[u8; 16], SataError> {
@@ -154,17 +161,18 @@ pub fn read_sector(lba: u64, buffer: &mut [u8]) -> Result<(), SataError> {
 
 fn initialize_controller(mmio: *mut u8) -> Result<Controller, SataError> {
     write_register(mmio, HBA_GHC, read_register(mmio, HBA_GHC) | HBA_GHC_AE);
-    write_register(mmio, HBA_GHC, read_register(mmio, HBA_GHC) | HBA_GHC_HR);
-    if !wait_for(|| read_register(mmio, HBA_GHC) & HBA_GHC_HR == 0) {
-        return Err(SataError::Timeout);
-    }
-    write_register(mmio, HBA_GHC, read_register(mmio, HBA_GHC) | HBA_GHC_AE);
     let implemented = read_register(mmio, HBA_PI);
     for port in 0..32 {
         if implemented & (1 << port) == 0 {
             continue;
         }
         let base = PORT_BASE + port * PORT_SIZE;
+        if !wait_for(|| {
+            let status = read_register(mmio, base + PORT_SSTS);
+            status & 0xF == 3 && (status >> 8) & 0xF != 0
+        }) {
+            continue;
+        }
         let status = read_register(mmio, base + PORT_SSTS);
         if status & 0xF != 3 || (status >> 8) & 0xF == 0 {
             continue;

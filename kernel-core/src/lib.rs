@@ -43,7 +43,8 @@ pub use paging::{
 };
 pub use scheduler::{TaskEntry, spawn as spawn_task, start as start_scheduler, yield_now};
 pub use sata::{
-    SataBlockDevice, SataError, identify as sata_identify, initialize as initialize_sata,
+    SataBlockDevice, SataError, identify as sata_identify,
+    identify_model_byte as sata_identify_model_byte, initialize as initialize_sata,
     is_available as sata_available, read_first_sector as sata_read_first_sector,
     read_sector as sata_read_sector,
 };

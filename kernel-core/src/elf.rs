@@ -138,7 +138,9 @@ pub fn load_user_elf(image: &[u8]) -> Result<LoadedImage, ElfError> {
     }
     Ok(LoadedImage {
         entry,
-        stack_pointer: USER_STACK_TOP,
+        // `_start` is a Rust function entry point, so emulate a normal call:
+        // the System V ABI requires RSP to be 8 modulo 16 on entry.
+        stack_pointer: USER_STACK_TOP - 8,
     })
 }
 

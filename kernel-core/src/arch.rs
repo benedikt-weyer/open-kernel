@@ -122,6 +122,7 @@ global_asm!(
 .type x86_exception_stub, @function
 x86_exception_stub:
     cli
+    mov %rsp, %rdi
     call exception_halt
 1:
     hlt
@@ -167,13 +168,11 @@ x86_syscall_stub:
     call scheduler_syscall_stack_top
     mov %rax, %rsp
     and $-16, %rsp
-    sub $8, %rsp
     call scheduler_save_syscall_state
     mov USER_SYSCALL_LENGTH(%rip), %rdx
     mov USER_SYSCALL_POINTER(%rip), %rsi
     mov USER_SYSCALL_NUMBER(%rip), %rdi
     call syscall_dispatch
-    add $8, %rsp
     pushq %rax
     call scheduler_current_syscall_state
     mov %rax, %rdx
@@ -408,9 +407,11 @@ fn syscall_pci_status() -> u64 {
 
 fn syscall_sata_identify() -> u64 {
     match crate::sata_identify() {
-        Ok(model) => {
+        Ok(()) => {
             console_output(b"SATA MODEL: ");
-            console_output(&model);
+            for index in 0..40 {
+                console_output(&[crate::sata_identify_model_byte(index)]);
+            }
             console_output(b"\r\n");
             0
         }
@@ -513,9 +514,19 @@ extern "C" fn irq_dispatch(vector: u64) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn exception_halt() -> ! {
-    Com1.write(b"open-kernel: CPU exception\r\n");
+extern "C" fn exception_halt(frame: *const u64) -> ! {
+    let instruction_pointer = unsafe { core::ptr::read_volatile(frame.add(1)) };
+    Com1.write(b"open-kernel: CPU exception at 0x");
+    write_hex(instruction_pointer);
+    Com1.write(b"\r\n");
     X86_64::halt()
+}
+
+fn write_hex(value: u64) {
+    for shift in (0..16).rev() {
+        let digit = ((value >> (shift * 4)) & 0xF) as u8;
+        Com1.write(&[hex_digit(digit)]);
+    }
 }
 
 fn load_gdt(gdt: &DescriptorTablePointer) {
