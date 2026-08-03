@@ -88,7 +88,12 @@ pub extern "C" fn kernel_main(magic: u32, boot_info_address: usize) -> ! {
                             module.module_size() as usize,
                         )
                     };
-                    let _ = kernel_core::register_boot_file("init", data);
+                    let name = match module.cmdline().map(str::as_bytes) {
+                        Ok(b"std-smoke") => "std-smoke",
+                        Ok(b"console") => "console",
+                        _ => "init",
+                    };
+                    let _ = kernel_core::register_boot_file(name, data);
                 }
                 (display, BootStatus::Ready)
             }

@@ -1,0 +1,11 @@
+[package]
+name = "init"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+openkernel-rt = { path = "../openkernel-rt" }
+
+[[bin]]
+name = "init"
+path = "src/main.rs"

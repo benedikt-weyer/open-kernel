@@ -13,14 +13,17 @@ fi
 BUILD_DIR="$ROOT_DIR/build"
 ISO_ROOT="$BUILD_DIR/iso-root"
 KERNEL="$BUILD_DIR/open-kernel.elf"
-USER_PROGRAM="$BUILD_DIR/init.elf"
+INIT_STAGED="$BUILD_DIR/init.elf"
 ISO="$BUILD_DIR/open-kernel.iso"
-USER_MANIFEST="$ROOT_DIR/user-program/Cargo.toml"
-USER_BINARY="$ROOT_DIR/target/x86_64-unknown-openkernel/release/user-program"
+INIT_MANIFEST="$ROOT_DIR/init/Cargo.toml"
+INIT_BINARY="$ROOT_DIR/target/x86_64-unknown-openkernel/release/init"
+CONSOLE_MANIFEST="$ROOT_DIR/user-program/Cargo.toml"
+CONSOLE_BINARY="$ROOT_DIR/target/x86_64-unknown-openkernel/release/user-program"
 OPENKERNEL_RUSTC="${OPENKERNEL_RUSTC:-/home/benedikt/Git/forks/rust-open-kernel/build/x86_64-unknown-linux-gnu/stage1/bin/rustc}"
 
-# The console is a std binary, so it needs the OpenKernel stage1 compiler
-# and its `std` port even on the GRUB/Multiboot2 path.
+# PID 1 (init) and the console are std binaries, so they need the
+# OpenKernel stage1 compiler and its `std` port even on the GRUB/Multiboot2
+# path.
 if [ ! -x "$OPENKERNEL_RUSTC" ]; then
     printf 'OpenKernel compiler not found: %s\n' "$OPENKERNEL_RUSTC" >&2
     exit 1
@@ -44,12 +47,16 @@ cargo rustc --manifest-path "$ROOT_DIR/multiboot2-adapter/Cargo.toml" --release 
     -C link-arg=-T"$ROOT_DIR/linker.ld" -C link-arg=-nostdlib \
     -C link-arg=-z -C link-arg=max-page-size=0x1000
 (cd "$RUST_FORK" && BOOTSTRAP_SKIP_TARGET_SANITY=1 ./x build library/std --target x86_64-unknown-openkernel)
-cargo clean --manifest-path "$USER_MANIFEST" -p user-program
-RUSTC="$OPENKERNEL_RUSTC" cargo rustc --manifest-path "$USER_MANIFEST" --release \
+cargo clean --manifest-path "$INIT_MANIFEST" -p init
+RUSTC="$OPENKERNEL_RUSTC" cargo rustc --manifest-path "$INIT_MANIFEST" --release \
+    --target x86_64-unknown-openkernel -- -C relocation-model=static -C code-model=small -C linker=ld \
+    -C link-arg=-melf_x86_64 -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib
+cargo clean --manifest-path "$CONSOLE_MANIFEST" -p user-program
+RUSTC="$OPENKERNEL_RUSTC" cargo rustc --manifest-path "$CONSOLE_MANIFEST" --release \
     --target x86_64-unknown-openkernel -- -C relocation-model=static -C code-model=small -C linker=ld \
     -C link-arg=-melf_x86_64 -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib
 cp "$ROOT_DIR/target/release/multiboot2-adapter" "$KERNEL"
-cp "$USER_BINARY" "$USER_PROGRAM"
+cp "$INIT_BINARY" "$INIT_STAGED"
 
 if ! grub-file --is-x86-multiboot2 "$KERNEL"; then
     printf 'Kernel is not a valid x86_64 Multiboot2 image.\n' >&2
@@ -57,7 +64,8 @@ if ! grub-file --is-x86-multiboot2 "$KERNEL"; then
 fi
 
 cp "$KERNEL" "$ISO_ROOT/boot/open-kernel.elf"
-cp "$USER_PROGRAM" "$ISO_ROOT/boot/init.elf"
+cp "$INIT_STAGED" "$ISO_ROOT/boot/init.elf"
+cp "$CONSOLE_BINARY" "$ISO_ROOT/boot/console.elf"
 cp "$ROOT_DIR/grub.cfg" "$ISO_ROOT/boot/grub/grub.cfg"
 grub-mkrescue -o "$ISO" "$ISO_ROOT"
 

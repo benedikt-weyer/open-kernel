@@ -150,6 +150,7 @@ pub extern "C" fn limine_entry() -> ! {
                 unsafe { core::slice::from_raw_parts(module.addr() as *const u8, module.size() as usize) };
             let name = match module.string().to_bytes() {
                 b"std-smoke" => "std-smoke",
+                b"console" => "console",
                 _ => "init",
             };
             let _ = kernel_core::register_boot_file(name, data);
