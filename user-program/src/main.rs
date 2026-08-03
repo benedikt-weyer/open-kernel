@@ -477,6 +477,7 @@ unsafe extern "C" fn memset(destination: *mut u8, value: i32, length: usize) -> 
 
 #[panic_handler]
 fn panic(_: &PanicInfo) -> ! {
+    let _ = syscall1(16, 101);
     loop {
         core::hint::spin_loop();
     }
