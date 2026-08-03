@@ -150,12 +150,12 @@ fn run_framebuffer_console(
         &input[..input_length],
         &response[..response_length],
     );
+    let mut mouse_cursor = MouseCursor::new();
+    mouse_cursor.draw(&framebuffer);
 
     loop {
         let mut redraw = false;
-        if crate::poll_mouse() {
-            redraw = true;
-        }
+        let mouse_moved = crate::poll_mouse();
         crate::scheduler::yield_if_preempted();
 
         match read_key(&keyboard) {
@@ -214,6 +214,7 @@ fn run_framebuffer_console(
         }
 
         if redraw {
+            mouse_cursor.restore(&framebuffer);
             render_framebuffer_console(
                 &framebuffer,
                 bootloader,
@@ -221,6 +222,10 @@ fn run_framebuffer_console(
                 &input[..input_length],
                 &response[..response_length],
             );
+            mouse_cursor.draw(&framebuffer);
+        } else if mouse_moved {
+            mouse_cursor.restore(&framebuffer);
+            mouse_cursor.draw(&framebuffer);
         }
     }
 }
@@ -357,11 +362,6 @@ fn render_framebuffer_console(
     draw_framebuffer_text(framebuffer, response, 32, 144, 2, 0x00FF_FFFF);
     draw_framebuffer_text(framebuffer, b"> ", 32, 176, 2, 0x00B8_E8FF);
     draw_framebuffer_text(framebuffer, input, 56, 176, 2, 0x00FF_FFFF);
-    let (cursor_x, cursor_y) = crate::mouse_position();
-    for offset in 0..10 {
-        put_framebuffer_pixel(framebuffer, cursor_x + offset, cursor_y, 0x00FF_FFFF);
-        put_framebuffer_pixel(framebuffer, cursor_x, cursor_y + offset, 0x00FF_FFFF);
-    }
 }
 
 fn run_console_command(
@@ -507,20 +507,101 @@ fn draw_framebuffer_text(
     }
 }
 
-fn put_framebuffer_pixel(framebuffer: &Framebuffer, x: usize, y: usize, color: u32) {
-    if x >= framebuffer.width || y >= framebuffer.height {
-        return;
+struct MouseCursor {
+    x: usize,
+    y: usize,
+    pixels: [u32; 19],
+    visible: bool,
+}
+
+impl MouseCursor {
+    const fn new() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            pixels: [0; 19],
+            visible: false,
+        }
     }
 
-    let pixel = unsafe {
+    fn draw(&mut self, framebuffer: &Framebuffer) {
+        if framebuffer.bits_per_pixel != 32 || framebuffer.width == 0 || framebuffer.height == 0 {
+            return;
+        }
+
+        let (mouse_x, mouse_y) = crate::mouse_position();
+        self.x = mouse_x.min(framebuffer.width - 1);
+        self.y = mouse_y.min(framebuffer.height - 1);
+        let mut index = 0;
+        for offset in 0..10 {
+            self.save_and_paint(framebuffer, self.x + offset, self.y, index);
+            if framebuffer_pixel(framebuffer, self.x + offset, self.y).is_some() {
+                index += 1;
+            }
+        }
+        for offset in 1..10 {
+            self.save_and_paint(framebuffer, self.x, self.y + offset, index);
+            if framebuffer_pixel(framebuffer, self.x, self.y + offset).is_some() {
+                index += 1;
+            }
+        }
+        self.visible = true;
+    }
+
+    fn restore(&mut self, framebuffer: &Framebuffer) {
+        if !self.visible {
+            return;
+        }
+
+        let mut index = 0;
+        for offset in 0..10 {
+            if let Some(pixel) = framebuffer_pixel(framebuffer, self.x + offset, self.y) {
+                unsafe {
+                    write_volatile(pixel, self.pixels[index]);
+                }
+                index += 1;
+            }
+        }
+        for offset in 1..10 {
+            if let Some(pixel) = framebuffer_pixel(framebuffer, self.x, self.y + offset) {
+                unsafe {
+                    write_volatile(pixel, self.pixels[index]);
+                }
+                index += 1;
+            }
+        }
+        self.visible = false;
+    }
+
+    fn save_and_paint(&mut self, framebuffer: &Framebuffer, x: usize, y: usize, index: usize) {
+        let Some(pixel) = framebuffer_pixel(framebuffer, x, y) else {
+            return;
+        };
+        unsafe {
+            self.pixels[index] = core::ptr::read_volatile(pixel);
+            write_volatile(pixel, 0x00FF_FFFF);
+        }
+    }
+}
+
+fn put_framebuffer_pixel(framebuffer: &Framebuffer, x: usize, y: usize, color: u32) {
+    if let Some(pixel) = framebuffer_pixel(framebuffer, x, y) {
+        unsafe {
+            write_volatile(pixel, color);
+        }
+    }
+}
+
+fn framebuffer_pixel(framebuffer: &Framebuffer, x: usize, y: usize) -> Option<*mut u32> {
+    if x >= framebuffer.width || y >= framebuffer.height {
+        return None;
+    }
+    Some(unsafe {
         framebuffer
             .address
             .add(y * framebuffer.pitch + x * core::mem::size_of::<u32>())
             .cast::<u32>()
-    };
-    unsafe {
-        write_volatile(pixel, color);
-    }
+    })
 }
 
 fn framebuffer_glyph(character: u8) -> [u8; 7] {
