@@ -324,6 +324,7 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64) -> u64 {
             crate::console::user_console_backspace();
             0
         }
+        9 => crate::shutdown(),
         _ => u64::MAX,
     }
 }
