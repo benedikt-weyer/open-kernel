@@ -43,6 +43,8 @@ impl IdtEntry {
     }
 }
 static mut IDT: [IdtEntry; 256] = [IdtEntry::MISSING; 256];
+static mut TIMER_TICKS: u64 = 0;
+static mut KEYBOARD_SCANCODE: u8 = 0;
 
 pub trait Architecture {
     fn initialize();
@@ -52,6 +54,9 @@ pub struct X86_64;
 
 unsafe extern "C" {
     fn x86_exception_stub();
+    fn x86_timer_irq_stub();
+    fn x86_keyboard_irq_stub();
+    fn x86_serial_irq_stub();
 }
 global_asm!(
     r#"
@@ -64,6 +69,35 @@ x86_exception_stub:
 1:
     hlt
     jmp 1b
+.macro irq_stub name, vector
+.global \name
+.type \name, @function
+\name:
+    push %rax
+    push %rcx
+    push %rdx
+    push %rsi
+    push %rdi
+    push %r8
+    push %r9
+    push %r10
+    push %r11
+    mov $\vector, %edi
+    call irq_dispatch
+    pop %r11
+    pop %r10
+    pop %r9
+    pop %r8
+    pop %rdi
+    pop %rsi
+    pop %rdx
+    pop %rcx
+    pop %rax
+    iretq
+.endm
+irq_stub x86_timer_irq_stub, 32
+irq_stub x86_keyboard_irq_stub, 33
+irq_stub x86_serial_irq_stub, 36
 "#,
     options(att_syntax)
 );
@@ -83,6 +117,9 @@ impl Architecture for X86_64 {
             for entry in (&mut *idt).iter_mut().take(32) {
                 entry.set_handler(x86_exception_stub as *const () as usize);
             }
+            (*idt)[32].set_handler(x86_timer_irq_stub as *const () as usize);
+            (*idt)[33].set_handler(x86_keyboard_irq_stub as *const () as usize);
+            (*idt)[36].set_handler(x86_serial_irq_stub as *const () as usize);
         }
         let idt_pointer = DescriptorTablePointer {
             limit: (core::mem::size_of::<[IdtEntry; 256]>() - 1) as u16,
@@ -91,7 +128,10 @@ impl Architecture for X86_64 {
         unsafe {
             asm!("lidt [{}]", in(reg) &idt_pointer, options(readonly, nostack));
         }
-        remap_and_mask_pic();
+        initialize_irq_controller();
+        unsafe {
+            asm!("sti", options(nomem, nostack));
+        }
         Com1.write(b"open-kernel: x86_64 interrupts initialized\r\n");
     }
     fn halt() -> ! {
@@ -100,6 +140,46 @@ impl Architecture for X86_64 {
                 asm!("hlt", options(nomem, nostack));
             }
         }
+    }
+}
+
+pub fn timer_ticks() -> u64 {
+    unsafe { core::ptr::read_volatile(&raw const TIMER_TICKS) }
+}
+
+pub fn take_keyboard_scancode() -> Option<u8> {
+    let scancode = unsafe { core::ptr::read_volatile(&raw const KEYBOARD_SCANCODE) };
+    if scancode == 0 {
+        return None;
+    }
+    unsafe {
+        core::ptr::write_volatile(&raw mut KEYBOARD_SCANCODE, 0);
+    }
+    Some(scancode)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn irq_dispatch(vector: u64) {
+    unsafe {
+        match vector {
+            32 => {
+                let ticks = core::ptr::read_volatile(&raw const TIMER_TICKS);
+                core::ptr::write_volatile(&raw mut TIMER_TICKS, ticks.wrapping_add(1));
+            }
+            33 => {
+                core::ptr::write_volatile(&raw mut KEYBOARD_SCANCODE, inb(0x60));
+            }
+            36 => {
+                if inb(0x3FD) & 1 != 0 {
+                    let _ = inb(0x3F8);
+                }
+            }
+            _ => {}
+        }
+        if vector >= 40 {
+            outb(0xA0, 0x20);
+        }
+        outb(0x20, 0x20);
     }
 }
 
@@ -118,7 +198,7 @@ fn load_gdt(gdt: &DescriptorTablePointer) {
         );
     }
 }
-fn remap_and_mask_pic() {
+fn initialize_irq_controller() {
     unsafe {
         for (port, value) in [
             (0x20_u16, 0x11_u8),
@@ -129,10 +209,30 @@ fn remap_and_mask_pic() {
             (0xA1, 0x02),
             (0x21, 0x01),
             (0xA1, 0x01),
-            (0x21, 0xFF),
+            (0x21, 0xEC),
             (0xA1, 0xFF),
         ] {
             asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack));
         }
+    }
+    let divisor = (1_193_182_u32 / 100) as u16;
+    unsafe {
+        outb(0x43, 0x36);
+        outb(0x40, divisor as u8);
+        outb(0x40, (divisor >> 8) as u8);
+        outb(0x3F9, 0x01);
+    }
+}
+
+unsafe fn inb(port: u16) -> u8 {
+    let value: u8;
+    unsafe {
+        asm!("in al, dx", in("dx") port, out("al") value, options(nomem, nostack));
+    }
+    value
+}
+unsafe fn outb(port: u16, value: u8) {
+    unsafe {
+        asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack));
     }
 }

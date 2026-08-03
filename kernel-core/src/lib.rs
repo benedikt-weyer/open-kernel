@@ -10,6 +10,7 @@ use arch::{Architecture, X86_64};
 use core::panic::PanicInfo;
 use serial::{Com1, SerialOutput};
 
+pub use arch::timer_ticks;
 pub use console::{BootInfo, BootStatus, Display, Framebuffer, boot};
 pub use memory::{
     MemoryRegion, MemoryRegionKind, PAGE_SIZE, PhysicalFrameAllocator, PhysicalMemoryRange,

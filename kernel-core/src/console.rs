@@ -1,7 +1,7 @@
 use core::{arch::asm, ptr::write_volatile};
 
 use crate::{
-    arch::{Architecture, X86_64},
+    arch::{Architecture, X86_64, take_keyboard_scancode},
     memory::{BitmapFrameAllocator, PhysicalFrameAllocator},
     serial::{Com1, SerialOutput},
 };
@@ -280,18 +280,23 @@ fn append_usize(target: &mut [u8], start: usize, mut value: usize) -> usize {
 }
 
 fn read_key() -> Option<u8> {
-    let status: u8;
-    unsafe {
-        asm!("in al, dx", in("dx") 0x64_u16, out("al") status, options(nomem, nostack));
-    }
-    if status & 1 == 0 {
-        return None;
-    }
-
-    let scancode: u8;
-    unsafe {
-        asm!("in al, dx", in("dx") 0x60_u16, out("al") scancode, options(nomem, nostack));
-    }
+    let scancode = match take_keyboard_scancode() {
+        Some(scancode) => scancode,
+        None => {
+            let status: u8;
+            unsafe {
+                asm!("in al, dx", in("dx") 0x64_u16, out("al") status, options(nomem, nostack));
+            }
+            if status & 1 == 0 {
+                return None;
+            }
+            let scancode: u8;
+            unsafe {
+                asm!("in al, dx", in("dx") 0x60_u16, out("al") scancode, options(nomem, nostack));
+            }
+            scancode
+        }
+    };
     if scancode & 0x80 != 0 {
         return None;
     }
