@@ -374,6 +374,16 @@ pub fn state(thread: ThreadId) -> Option<ThreadState> {
     unsafe { Some((*(&raw const THREADS))[thread].state) }
 }
 
+pub fn current_id() -> Option<ThreadId> {
+    unsafe {
+        if CURRENT_THREAD == NO_THREAD {
+            None
+        } else {
+            Some(CURRENT_THREAD)
+        }
+    }
+}
+
 pub fn process_id(thread: ThreadId) -> Option<ProcessId> {
     if thread >= MAX_THREADS {
         return None;

@@ -22,7 +22,7 @@ use arch::{Architecture, X86_64};
 use core::panic::PanicInfo;
 use serial::{Com1, SerialOutput};
 
-pub use arch::timer_ticks;
+pub use arch::{monotonic_milliseconds, timer_ticks};
 pub use arch::shutdown;
 pub use console::{BootInfo, BootStatus, Display, Framebuffer, boot};
 pub use drivers::{
@@ -46,7 +46,8 @@ pub use paging::{
 pub use scheduler::{
     Process, ProcessId, TaskEntry, ThreadId, ThreadState, UserContext, block_current as block_current_thread,
     exit_current as exit_current_thread, spawn as spawn_task, start as start_scheduler,
-    process_id as thread_process_id, state as thread_state, wake as wake_thread, yield_now,
+    current_id as current_thread_id, process_id as thread_process_id, state as thread_state,
+    wake as wake_thread, yield_now,
 };
 pub use sata::{
     SataBlockDevice, SataError, identify as sata_identify,

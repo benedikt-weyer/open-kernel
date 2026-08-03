@@ -12,6 +12,8 @@ const IA32_STAR: u32 = 0xC000_0081;
 const IA32_LSTAR: u32 = 0xC000_0082;
 const IA32_FMASK: u32 = 0xC000_0084;
 const SYSCALL_STACK_SIZE: usize = 16 * 1024;
+const PIT_HZ: u64 = 100;
+const MAX_SLEEPERS: usize = 8;
 
 static mut GDT: [u64; 7] = [
     0,
@@ -103,6 +105,12 @@ impl IdtEntry {
 }
 static mut IDT: [IdtEntry; 256] = [IdtEntry::MISSING; 256];
 static mut TIMER_TICKS: u64 = 0;
+#[derive(Clone, Copy)]
+struct Sleeper {
+    thread: usize,
+    deadline: u64,
+}
+static mut SLEEPERS: [Option<Sleeper>; MAX_SLEEPERS] = [None; MAX_SLEEPERS];
 static mut KEYBOARD_SCANCODE: u8 = 0;
 
 pub trait Architecture {
@@ -397,6 +405,7 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         24 => syscall_chdir(pointer, length),
         25 => syscall_getcwd(pointer, length),
         26 => syscall_executable_info(pointer, length),
+        27 => monotonic_milliseconds(),
         _ => u64::MAX,
     }
 }
@@ -411,14 +420,25 @@ fn syscall_thread_create(entry: u64, argument: u64) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-fn syscall_sleep(ticks: u64) -> u64 {
-    let start = timer_ticks();
-    while timer_ticks().wrapping_sub(start) < ticks {
-        unsafe {
-            asm!("sti", "hlt", "cli", options(nomem, nostack));
+fn syscall_sleep(milliseconds: u64) -> u64 {
+    if milliseconds == 0 {
+        return 0;
+    }
+    let Some(thread) = crate::scheduler::current_id() else {
+        return u64::MAX;
+    };
+    let ticks = milliseconds.saturating_add(9) / 10;
+    let deadline = timer_ticks().wrapping_add(ticks.max(1));
+    unsafe {
+        for sleeper in (&mut *(&raw mut SLEEPERS)).iter_mut() {
+            if sleeper.is_none() {
+                *sleeper = Some(Sleeper { thread, deadline });
+                crate::scheduler::block_current();
+                return 0;
+            }
         }
     }
-    0
+    u64::MAX
 }
 
 fn syscall_vfs_open(path: u64, length: u64, flags: u64) -> u64 {
@@ -619,6 +639,24 @@ pub fn timer_ticks() -> u64 {
     unsafe { core::ptr::read_volatile(&raw const TIMER_TICKS) }
 }
 
+pub fn monotonic_milliseconds() -> u64 {
+    timer_ticks().saturating_mul(1_000 / PIT_HZ)
+}
+
+fn wake_expired_sleepers(ticks: u64) {
+    unsafe {
+        for sleeper in (&mut *(&raw mut SLEEPERS)).iter_mut() {
+            let Some(entry) = *sleeper else {
+                continue;
+            };
+            if ticks.wrapping_sub(entry.deadline) < (1_u64 << 63) {
+                *sleeper = None;
+                crate::scheduler::wake(entry.thread);
+            }
+        }
+    }
+}
+
 pub fn take_keyboard_scancode() -> Option<u8> {
     let scancode = unsafe { core::ptr::read_volatile(&raw const KEYBOARD_SCANCODE) };
     if scancode == 0 {
@@ -641,7 +679,9 @@ extern "C" fn irq_dispatch(vector: u64) {
         match vector {
             32 => {
                 let ticks = core::ptr::read_volatile(&raw const TIMER_TICKS);
-                core::ptr::write_volatile(&raw mut TIMER_TICKS, ticks.wrapping_add(1));
+                let next_ticks = ticks.wrapping_add(1);
+                core::ptr::write_volatile(&raw mut TIMER_TICKS, next_ticks);
+                wake_expired_sleepers(next_ticks);
             }
             33 => {
                 core::ptr::write_volatile(&raw mut KEYBOARD_SCANCODE, inb(0x60));

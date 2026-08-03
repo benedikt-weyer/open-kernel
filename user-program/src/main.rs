@@ -14,15 +14,16 @@ use core::panic::PanicInfo;
 
 static BANNER: [u8; 37] = *b"OPEN KERNEL USER CONSOLE\r\nTYPE HELP\r\n";
 static PROMPT: [u8; 2] = *b"> ";
-static HELP: &[u8] = b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS HEAP VFS ENV\r\n";
+static HELP: &[u8] = b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS HEAP VFS ENV TIME\r\n";
 static UNKNOWN: [u8; 17] = *b"UNKNOWN COMMAND\r\n";
 static EXITING: [u8; 9] = *b"GOODBYE\r\n";
-const COMMANDS: [&[u8]; 13] = [
+const COMMANDS: [&[u8]; 14] = [
     b"help", b"clear", b"exit", b"shutdown", b"sata", b"identify", b"read", b"pci", b"lsblk",
     b"threads",
     b"heap",
     b"vfs",
     b"env",
+    b"time",
 ];
 
 struct BrkAllocator {
@@ -134,6 +135,8 @@ extern "C" fn _start() -> ! {
                 vfs_test();
             } else if equals(input, length, b"env") {
                 environment_test();
+            } else if equals(input, length, b"time") {
+                time_test();
             } else if length != 0 {
                 write(&UNKNOWN);
             }
@@ -168,6 +171,20 @@ extern "C" fn _start() -> ! {
             length += 1;
             write(core::slice::from_ref(&character));
         }
+    }
+}
+
+fn time_test() {
+    let before = syscall0(27);
+    if syscall1(5, 30) != 0 {
+        write(b"SLEEP FAILED\r\n");
+        return;
+    }
+    let after = syscall0(27);
+    if after.wrapping_sub(before) >= 30 {
+        write(b"TIME OK\r\n");
+    } else {
+        write(b"TIME FAILED\r\n");
     }
 }
 
