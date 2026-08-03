@@ -19,6 +19,7 @@ static BOOTSTRAP_LINKAGE: &u8 = &multiboot2_adapter_bootstrap::BOOTSTRAP_LINK;
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main(magic: u32, boot_info_address: usize) -> ! {
     if magic != MAGIC {
+        kernel_core::initialize_physical_memory(core::iter::empty(), core::iter::empty());
         kernel_core::boot(BootInfo::new(
             Display::VgaText,
             "GRUB Multiboot2",

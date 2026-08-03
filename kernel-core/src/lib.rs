@@ -59,6 +59,7 @@ impl IdtEntry {
 
 static mut IDT: [IdtEntry; 256] = [IdtEntry::MISSING; 256];
 static mut FRAME_BITMAP: [u8; FRAME_BITMAP_BYTES] = [0; FRAME_BITMAP_BYTES];
+static mut ALLOCATED_BITMAP: [u8; FRAME_BITMAP_BYTES] = [0; FRAME_BITMAP_BYTES];
 static mut MEMORY_STATS: PhysicalMemoryStats = PhysicalMemoryStats::EMPTY;
 
 #[derive(Clone, Copy)]
@@ -229,6 +230,10 @@ pub fn initialize_physical_memory(
         for byte in &mut *bitmap {
             write_volatile(byte, u8::MAX);
         }
+        let allocated = &raw mut ALLOCATED_BITMAP;
+        for byte in &mut *allocated {
+            write_volatile(byte, 0);
+        }
     }
 
     for region in regions {
@@ -267,6 +272,7 @@ pub fn allocate_physical_frame() -> Option<u64> {
     for frame in 0..MAX_PHYSICAL_FRAMES {
         if !frame_is_reserved(frame) {
             set_frame_reserved(frame, true);
+            set_frame_allocated(frame, true);
             unsafe {
                 let stats = &raw mut MEMORY_STATS;
                 (*stats).free_frames -= 1;
@@ -283,8 +289,9 @@ pub fn free_physical_frame(address: u64) {
     }
 
     let frame = (address / PAGE_SIZE) as usize;
-    if frame_is_reserved(frame) {
+    if frame_is_allocated(frame) {
         set_frame_reserved(frame, false);
+        set_frame_allocated(frame, false);
         unsafe {
             let stats = &raw mut MEMORY_STATS;
             (*stats).free_frames += 1;
@@ -316,6 +323,29 @@ fn set_frame_reserved(frame: usize, reserved: bool) {
         write_volatile(
             byte,
             if reserved {
+                value | mask
+            } else {
+                value & !mask
+            },
+        );
+    }
+}
+
+fn frame_is_allocated(frame: usize) -> bool {
+    let bitmap = &raw const ALLOCATED_BITMAP;
+    let byte = unsafe { core::ptr::read_volatile((*bitmap).as_ptr().add(frame / 8)) };
+    byte & (1 << (frame % 8)) != 0
+}
+
+fn set_frame_allocated(frame: usize, allocated: bool) {
+    let bitmap = &raw mut ALLOCATED_BITMAP;
+    let byte = unsafe { (*bitmap).as_mut_ptr().add(frame / 8) };
+    let mask = 1 << (frame % 8);
+    let value = unsafe { core::ptr::read_volatile(byte) };
+    unsafe {
+        write_volatile(
+            byte,
+            if allocated {
                 value | mask
             } else {
                 value & !mask
