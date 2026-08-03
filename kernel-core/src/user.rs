@@ -8,11 +8,23 @@ const USER_HEAP_BASE: u64 = 0x0000_5000_0000_0000;
 const USER_HEAP_LIMIT: u64 = 0x0000_7000_0000_0000;
 static mut USER_HEAP_BREAK: u64 = USER_HEAP_BASE;
 static mut USER_HEAP_MAPPED_END: u64 = USER_HEAP_BASE;
+const EXECUTABLE_PATH: &[u8] = b"/init";
+const CURRENT_DIRECTORY_MAX: usize = 5;
+static mut CURRENT_DIRECTORY: [u8; CURRENT_DIRECTORY_MAX] = [0; CURRENT_DIRECTORY_MAX];
+static mut CURRENT_DIRECTORY_LENGTH: usize = 1;
+static mut EXECUTABLE_ENTRY: u64 = 0;
+static mut RESOLVED_PATH: [u8; FD_PATH_LENGTH] = [0; FD_PATH_LENGTH];
 const MAX_FDS: usize = 16;
 const FD_PATH_LENGTH: usize = 64;
 pub const OPEN_WRITE: u64 = 1;
 pub const OPEN_CREATE: u64 = 2;
 pub const OPEN_DIRECTORY: u64 = 4;
+
+#[derive(Clone, Copy)]
+pub struct ExecutableMetadata {
+    pub entry: u64,
+    pub path: &'static str,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DescriptorKind {
@@ -41,7 +53,7 @@ static mut FILE_DESCRIPTORS: [Descriptor; MAX_FDS] = [Descriptor::EMPTY; MAX_FDS
 
 pub fn run_demo() -> Result<(), ElfError> {
     let image = vfs_open("/init").ok_or(ElfError::InvalidHeader)?;
-    let loaded = load_user_elf(image)?;
+    let mut loaded = load_user_elf(image)?;
     unsafe {
         USER_IMAGE = Some(loaded);
         USER_HEAP_BREAK = USER_HEAP_BASE;
@@ -52,21 +64,32 @@ pub fn run_demo() -> Result<(), ElfError> {
                 Descriptor::EMPTY,
             );
         }
+        CURRENT_DIRECTORY[0] = b'/';
+        CURRENT_DIRECTORY_LENGTH = 1;
+        EXECUTABLE_ENTRY = loaded.entry;
     }
+    loaded.stack_pointer = initialize_process_stack(loaded.stack_pointer);
     crate::scheduler::initialize_user_process();
     crate::scheduler::spawn_user(loaded.entry, 0, Some(loaded.stack_pointer))
         .ok_or(PagingError::FrameAllocationFailed)?;
     crate::scheduler::start()
 }
 
+pub fn executable_metadata() -> ExecutableMetadata {
+    ExecutableMetadata {
+        entry: unsafe { EXECUTABLE_ENTRY },
+        path: "/init",
+    }
+}
+
 pub(crate) fn open(path: &[u8], flags: u64) -> u64 {
-    let Ok(path) = core::str::from_utf8(path) else {
+    let Some(path) = resolve_path(path) else {
         return u64::MAX;
     };
     let directory = flags & OPEN_DIRECTORY != 0;
     let writable = flags & OPEN_WRITE != 0;
     let create = flags & OPEN_CREATE != 0;
-    if (directory && (path != "/" && path != "/tmp")) || (!directory && crate::vfs_open_file(path, writable, create).is_err()) {
+    if (directory && !crate::vfs_is_directory(path)) || (!directory && crate::vfs_open_file(path, writable, create).is_err()) {
         return u64::MAX;
     }
     unsafe {
@@ -88,6 +111,46 @@ pub(crate) fn open(path: &[u8], flags: u64) -> u64 {
         }
     }
     u64::MAX
+}
+
+pub(crate) fn chdir(path: &[u8]) -> u64 {
+    let Some(path) = resolve_path(path) else {
+        return u64::MAX;
+    };
+    if !crate::vfs_is_directory(path) {
+        return u64::MAX;
+    }
+    unsafe {
+        CURRENT_DIRECTORY_LENGTH = path.len();
+        for (index, byte) in path.as_bytes().iter().enumerate() {
+            CURRENT_DIRECTORY[index] = *byte;
+        }
+    }
+    0
+}
+
+pub(crate) fn getcwd(output: &mut [u8]) -> u64 {
+    unsafe {
+        if output.len() < CURRENT_DIRECTORY_LENGTH + 1 {
+            return u64::MAX;
+        }
+        for index in 0..CURRENT_DIRECTORY_LENGTH {
+            output[index] = CURRENT_DIRECTORY[index];
+        }
+        output[CURRENT_DIRECTORY_LENGTH] = 0;
+        CURRENT_DIRECTORY_LENGTH as u64
+    }
+}
+
+pub(crate) fn executable_info(output: &mut [u8]) -> u64 {
+    if output.len() < EXECUTABLE_PATH.len() + 1 {
+        return u64::MAX;
+    }
+    for (index, byte) in EXECUTABLE_PATH.iter().enumerate() {
+        output[index] = *byte;
+    }
+    output[EXECUTABLE_PATH.len()] = 0;
+    unsafe { EXECUTABLE_ENTRY }
 }
 
 pub(crate) fn read(fd: u64, output: &mut [u8]) -> u64 {
@@ -224,6 +287,64 @@ pub(crate) fn brk(requested_break: u64) -> u64 {
         USER_HEAP_BREAK = requested_break;
         USER_HEAP_MAPPED_END = required_end;
         requested_break
+    }
+}
+
+fn resolve_path(path: &[u8]) -> Option<&'static str> {
+    unsafe {
+        let mut length = 0;
+        if path.first() != Some(&b'/') {
+            if CURRENT_DIRECTORY_LENGTH + 1 + path.len() >= FD_PATH_LENGTH {
+                return None;
+            }
+            for index in 0..CURRENT_DIRECTORY_LENGTH {
+                RESOLVED_PATH[length] = CURRENT_DIRECTORY[index];
+                length += 1;
+            }
+            if length != 1 {
+                RESOLVED_PATH[length] = b'/';
+                length += 1;
+            }
+        }
+        if length + path.len() >= FD_PATH_LENGTH {
+            return None;
+        }
+        for (index, byte) in path.iter().enumerate() {
+            RESOLVED_PATH[length + index] = *byte;
+        }
+        length += path.len();
+        core::str::from_utf8(&RESOLVED_PATH[..length]).ok()
+    }
+}
+
+fn initialize_process_stack(stack_pointer: u64) -> u64 {
+    let program_name = b"init\0";
+    let path = b"PATH=/bin\0";
+    let pwd = b"PWD=/\0";
+    let mut cursor = stack_pointer + 8;
+    cursor -= program_name.len() as u64;
+    let program_name_pointer = cursor;
+    write_user_bytes(cursor, program_name);
+    cursor -= path.len() as u64;
+    let path_pointer = cursor;
+    write_user_bytes(cursor, path);
+    cursor -= pwd.len() as u64;
+    let pwd_pointer = cursor;
+    write_user_bytes(cursor, pwd);
+    cursor &= !0xF;
+
+    // A padding word preserves the 8-byte System V function-entry alignment
+    // used by the hand-written Rust `_start` in this image.
+    for value in [0, 0, 0, 0, pwd_pointer, path_pointer, 0, program_name_pointer, 1] {
+        cursor -= 8;
+        unsafe { core::ptr::write_volatile(cursor as *mut u64, value) };
+    }
+    cursor
+}
+
+fn write_user_bytes(address: u64, bytes: &[u8]) {
+    for (index, byte) in bytes.iter().enumerate() {
+        unsafe { core::ptr::write_volatile((address as *mut u8).add(index), *byte) };
     }
 }
 

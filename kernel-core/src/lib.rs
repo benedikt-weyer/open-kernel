@@ -60,8 +60,9 @@ pub use storage::{
     read as read_ram_file, register_boot_file, write as write_ram_file,
 };
 pub use xhci::XhciController;
+pub use user::{ExecutableMetadata, executable_metadata};
 pub use vfs::{
-    VfsError, directory_entry as vfs_directory_entry, mount_count as vfs_mount_count,
+    VfsError, directory_entry as vfs_directory_entry, is_directory as vfs_is_directory, mount_count as vfs_mount_count,
     mount_initramfs, mounted as vfs_mounted, open as vfs_open, open_file as vfs_open_file,
     write as vfs_write, write_at as vfs_write_at,
 };

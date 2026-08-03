@@ -394,6 +394,9 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         21 => syscall_vfs_write(pointer, length, argument),
         22 => crate::user::close(pointer),
         23 => crate::user::seek(pointer, length as i64, argument),
+        24 => syscall_chdir(pointer, length),
+        25 => syscall_getcwd(pointer, length),
+        26 => syscall_executable_info(pointer, length),
         _ => u64::MAX,
     }
 }
@@ -437,6 +440,27 @@ fn syscall_vfs_write(fd: u64, buffer: u64, length: u64) -> u64 {
         return u64::MAX;
     };
     crate::user::write(fd, input)
+}
+
+fn syscall_chdir(path: u64, length: u64) -> u64 {
+    let Some(path) = user_bytes(path, length, 64) else {
+        return u64::MAX;
+    };
+    crate::user::chdir(path)
+}
+
+fn syscall_getcwd(buffer: u64, length: u64) -> u64 {
+    let Some(output) = user_bytes_mut(buffer, length, 64) else {
+        return u64::MAX;
+    };
+    crate::user::getcwd(output)
+}
+
+fn syscall_executable_info(buffer: u64, length: u64) -> u64 {
+    let Some(output) = user_bytes_mut(buffer, length, 64) else {
+        return u64::MAX;
+    };
+    crate::user::executable_info(output)
 }
 
 fn syscall_write(pointer: u64, length: u64) -> u64 {

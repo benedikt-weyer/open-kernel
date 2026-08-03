@@ -14,14 +14,15 @@ use core::panic::PanicInfo;
 
 static BANNER: [u8; 37] = *b"OPEN KERNEL USER CONSOLE\r\nTYPE HELP\r\n";
 static PROMPT: [u8; 2] = *b"> ";
-static HELP: &[u8] = b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS HEAP VFS\r\n";
+static HELP: &[u8] = b"COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS HEAP VFS ENV\r\n";
 static UNKNOWN: [u8; 17] = *b"UNKNOWN COMMAND\r\n";
 static EXITING: [u8; 9] = *b"GOODBYE\r\n";
-const COMMANDS: [&[u8]; 12] = [
+const COMMANDS: [&[u8]; 13] = [
     b"help", b"clear", b"exit", b"shutdown", b"sata", b"identify", b"read", b"pci", b"lsblk",
     b"threads",
     b"heap",
     b"vfs",
+    b"env",
 ];
 
 struct BrkAllocator {
@@ -131,6 +132,8 @@ extern "C" fn _start() -> ! {
                 heap_test();
             } else if equals(input, length, b"vfs") {
                 vfs_test();
+            } else if equals(input, length, b"env") {
+                environment_test();
             } else if length != 0 {
                 write(&UNKNOWN);
             }
@@ -166,6 +169,28 @@ extern "C" fn _start() -> ! {
             write(core::slice::from_ref(&character));
         }
     }
+}
+
+fn environment_test() {
+    let mut cwd = [0_u8; 8];
+    let mut executable = [0_u8; 16];
+    let entry = syscall2(26, executable.as_mut_ptr() as u64, executable.len() as u64);
+    if entry == u64::MAX
+        || syscall2(25, cwd.as_mut_ptr() as u64, cwd.len() as u64) != 1
+        || cwd[0] != b'/'
+        || &executable[..5] != b"/init"
+    {
+        write(b"ENVIRONMENT FAILED\r\n");
+        return;
+    }
+    if syscall2(24, b"/tmp".as_ptr() as u64, 4) != 0
+        || syscall2(25, cwd.as_mut_ptr() as u64, cwd.len() as u64) != 4
+        || &cwd[..4] != b"/tmp"
+    {
+        write(b"CWD FAILED\r\n");
+        return;
+    }
+    write(b"ENVIRONMENT OK\r\n");
 }
 
 fn vfs_test() {

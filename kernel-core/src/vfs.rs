@@ -107,6 +107,10 @@ pub fn directory_entry(path: &str, index: usize, output: &mut [u8]) -> Option<us
     }
 }
 
+pub fn is_directory(path: &str) -> bool {
+    matches!(path, "/" | "/tmp")
+}
+
 pub fn mounted() -> bool {
     unsafe { (*(&raw const ROOT_MOUNT)).is_some() }
 }
