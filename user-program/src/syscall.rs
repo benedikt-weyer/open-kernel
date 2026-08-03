@@ -17,9 +17,13 @@ pub fn erase_char() {
     syscall0(8);
 }
 
-pub fn shutdown() -> ! {
-    syscall0(9);
-    hang()
+pub const POWER_EVENT_SHUTDOWN: u64 = 1;
+pub const POWER_EVENT_REBOOT: u64 = 2;
+
+/// Asks init to shut down or reboot the system, rather than cutting power
+/// directly, so services get stopped in order first.
+pub fn request_power_event(kind: u64) -> bool {
+    syscall1(37, kind) == 0
 }
 
 pub fn process_exit() -> ! {

@@ -8,10 +8,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Condvar, Mutex};
 
 const HELP: &str =
-    "COMMANDS: HELP CLEAR EXIT SHUTDOWN SATA IDENTIFY READ PCI LSBLK THREADS HEAP VFS ENV TIME SYNC RUN LS\r\n";
-const COMMANDS: [&str; 17] = [
-    "help", "clear", "exit", "shutdown", "sata", "identify", "read", "pci", "lsblk", "threads",
-    "heap", "vfs", "env", "time", "sync", "run", "ls",
+    "COMMANDS: HELP CLEAR EXIT SHUTDOWN REBOOT SATA IDENTIFY READ PCI LSBLK THREADS HEAP VFS ENV TIME SYNC RUN LS\r\n";
+const COMMANDS: [&str; 18] = [
+    "help", "clear", "exit", "shutdown", "reboot", "sata", "identify", "read", "pci", "lsblk",
+    "threads", "heap", "vfs", "env", "time", "sync", "run", "ls",
 ];
 
 static SYNC_MUTEX: Mutex<()> = Mutex::new(());
@@ -73,8 +73,18 @@ fn run_command(command: &str) {
             syscall::process_exit();
         }
         "shutdown" => {
-            eprint!("GOODBYE\r\n");
-            syscall::shutdown();
+            if syscall::request_power_event(syscall::POWER_EVENT_SHUTDOWN) {
+                eprint!("SHUTDOWN REQUESTED\r\n");
+            } else {
+                eprint!("SHUTDOWN REQUEST FAILED\r\n");
+            }
+        }
+        "reboot" => {
+            if syscall::request_power_event(syscall::POWER_EVENT_REBOOT) {
+                eprint!("REBOOT REQUESTED\r\n");
+            } else {
+                eprint!("REBOOT REQUEST FAILED\r\n");
+            }
         }
         "sata" => syscall::sata_status(),
         "identify" => syscall::sata_identify(),

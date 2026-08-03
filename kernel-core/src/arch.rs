@@ -424,8 +424,71 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         32 => syscall_vfs_stat(pointer, length, argument),
         33 => syscall_process_spawn(pointer, length, argument),
         34 => crate::wait_process(pointer as usize).unwrap_or(u64::MAX),
+        35 => crate::try_wait_process(pointer as usize).unwrap_or(u64::MAX),
+        36 => reboot(),
+        37 => syscall_request_power_event(pointer),
+        38 => syscall_poll_power_event(),
+        39 => u64::from(crate::terminate_process(pointer as usize)),
+        40 => syscall_reap_any_child(pointer),
         _ => u64::MAX,
     }
+}
+
+/// Reaps one exited child of the caller (known service or reparented
+/// orphan) and, if `status_pointer` is non-zero, writes its exit status
+/// there. Returns the reaped pid, or `u64::MAX` if no child has exited.
+fn syscall_reap_any_child(status_pointer: u64) -> u64 {
+    let Some((process, status)) = crate::reap_any_child() else {
+        return u64::MAX;
+    };
+    if status_pointer != 0 {
+        if let Some(output) = user_bytes_mut(status_pointer, 8, 8) {
+            output.copy_from_slice(&status.to_le_bytes());
+        }
+    }
+    process as u64
+}
+
+static mut POWER_EVENT: u8 = 0;
+pub const POWER_EVENT_SHUTDOWN: u64 = 1;
+pub const POWER_EVENT_REBOOT: u64 = 2;
+
+/// Lets any process ask PID 1 to shut down or reboot the system instead of
+/// calling the raw power syscalls directly, since only init should decide
+/// when it's safe to actually cut power. Analogous to raising a signal.
+fn syscall_request_power_event(kind: u64) -> u64 {
+    if kind != POWER_EVENT_SHUTDOWN && kind != POWER_EVENT_REBOOT {
+        return u64::MAX;
+    }
+    unsafe {
+        core::ptr::write_volatile(&raw mut POWER_EVENT, kind as u8);
+    }
+    0
+}
+
+/// Consumes the pending power-event request, if any. Intended to be polled
+/// by init's supervisor loop.
+fn syscall_poll_power_event() -> u64 {
+    unsafe {
+        let value = core::ptr::read_volatile(&raw const POWER_EVENT);
+        core::ptr::write_volatile(&raw mut POWER_EVENT, 0);
+        value as u64
+    }
+}
+
+/// Pulses the keyboard controller's reset line. There is no ACPI reboot
+/// port equivalent to the shutdown one, so this uses the classic 8042
+/// reset trick instead.
+pub fn reboot() -> ! {
+    unsafe {
+        for _ in 0..100_000 {
+            if inb(0x64) & 0x02 == 0 {
+                break;
+            }
+        }
+        outb(0x64, 0xFE);
+    }
+    X86_64::halt()
 }
 
 fn syscall_spawn() -> u64 {

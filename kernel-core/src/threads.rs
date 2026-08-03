@@ -286,6 +286,28 @@ pub fn wait_process(process: ProcessId) -> Option<u64> {
     Some(status)
 }
 
+/// Like [`wait_process`], but never blocks: returns `None` immediately if
+/// `process` has not exited yet. A supervisor calls this for each tracked
+/// service on a timer instead of blocking on one child at a time; this is
+/// also how PID 1 reaps its children so they never linger as zombies.
+pub fn try_wait_process(process: ProcessId) -> Option<u64> {
+    let current_process = current_id().and_then(process_id)?;
+    let main_thread = unsafe {
+        (*(&raw const PROCESSES))
+            .iter()
+            .find(|record| record.id == process && record.parent == Some(current_process))
+            .and_then(|record| record.main_thread)?
+    };
+    let status = try_join(main_thread)?;
+    unsafe {
+        if let Some(record) = (*(&raw mut PROCESSES)).iter_mut().find(|record| record.id == process) {
+            crate::destroy_user_address_space(record.address_space);
+            *record = Process::EMPTY;
+        }
+    }
+    Some(status)
+}
+
 pub fn process_address_space(id: ProcessId) -> Option<u64> {
     unsafe {
         (*(&raw const PROCESSES))
@@ -438,10 +460,55 @@ pub fn exit_current_with_status(status: u64) -> ! {
                     enqueue(waiter);
                 }
             }
+            reparent_children_of_exited_process(current);
             schedule_from_current(current);
         }
     }
     idle_loop()
+}
+
+/// If `thread` was a process's main thread, that process is now gone: hand
+/// its still-running children off to init (PID 1) so someone remains
+/// responsible for reaping them, mirroring how a real kernel reparents
+/// orphans instead of leaving them unwaited.
+unsafe fn reparent_children_of_exited_process(thread: ThreadId) {
+    unsafe {
+        let Some(exited_process) = (*(&raw const PROCESSES))
+            .iter()
+            .find(|record| record.main_thread == Some(thread))
+            .map(|record| record.id)
+        else {
+            return;
+        };
+        for record in (*(&raw mut PROCESSES)).iter_mut() {
+            if record.parent == Some(exited_process) {
+                record.parent = Some(USER_PROCESS_ID);
+            }
+        }
+    }
+}
+
+/// Reaps and returns the first exited child of the calling process,
+/// regardless of whether the caller already knew its pid. This is how
+/// PID 1 drains both its own services and any orphans reparented to it
+/// without leaving zombies behind.
+pub fn reap_any_child() -> Option<(ProcessId, u64)> {
+    let current_process = current_id().and_then(process_id)?;
+    let (process, main_thread) = unsafe {
+        (*(&raw const PROCESSES)).iter().find_map(|record| {
+            let main_thread = record.main_thread?;
+            let exited = (*(&raw const THREADS))[main_thread].state == ThreadState::Exited;
+            (record.parent == Some(current_process) && exited).then_some((record.id, main_thread))
+        })?
+    };
+    let status = try_join(main_thread)?;
+    unsafe {
+        if let Some(record) = (*(&raw mut PROCESSES)).iter_mut().find(|record| record.id == process) {
+            crate::destroy_user_address_space(record.address_space);
+            *record = Process::EMPTY;
+        }
+    }
+    Some((process, status))
 }
 
 pub fn join(thread: ThreadId) -> Option<u64> {
@@ -475,6 +542,64 @@ pub fn join(thread: ThreadId) -> Option<u64> {
         }
         Some(target.exit_status)
     }
+}
+
+/// Like [`join`], but never blocks: returns `None` immediately if `thread`
+/// has not exited yet. Lets a supervisor (init) poll many children instead
+/// of blocking on one at a time.
+pub fn try_join(thread: ThreadId) -> Option<u64> {
+    unsafe {
+        let current = CURRENT_THREAD;
+        if current == NO_THREAD || current == thread || thread >= MAX_THREADS {
+            return None;
+        }
+        let target = &mut (*(&raw mut THREADS))[thread];
+        if target.state != ThreadState::Exited {
+            return None;
+        }
+        if target.join_waiter_count == 0 {
+            target.reapable = true;
+        }
+        Some(target.exit_status)
+    }
+}
+
+/// Marks a status value produced by [`terminate_process`] rather than a
+/// process's own voluntary exit.
+pub const TERMINATED_STATUS: u64 = 0x8000_0000_0000_0000;
+
+/// Forcibly ends one of the caller's direct child processes. Used by a
+/// supervisor to stop a still-running service during shutdown, since this
+/// kernel has no general signal-delivery mechanism.
+pub fn terminate_process(process: ProcessId) -> bool {
+    let Some(current_process) = current_id().and_then(process_id) else {
+        return false;
+    };
+    unsafe {
+        let Some(main_thread) = (*(&raw const PROCESSES))
+            .iter()
+            .find(|record| record.id == process && record.parent == Some(current_process))
+            .and_then(|record| record.main_thread)
+        else {
+            return false;
+        };
+        let task = &mut (*(&raw mut THREADS))[main_thread];
+        if task.state == ThreadState::Exited {
+            return true;
+        }
+        task.state = ThreadState::Exited;
+        task.entry = None;
+        task.exit_status = TERMINATED_STATUS;
+        for waiter_index in 0..task.join_waiter_count {
+            let waiter = task.join_waiters[waiter_index];
+            let waiting = &mut (*(&raw mut THREADS))[waiter];
+            if waiting.state == ThreadState::Blocked {
+                waiting.state = ThreadState::Ready;
+                enqueue(waiter);
+            }
+        }
+    }
+    true
 }
 
 pub fn state(thread: ThreadId) -> Option<ThreadState> {
@@ -627,9 +752,22 @@ unsafe fn ensure_idle() {
     IDLE_CREATED = true;
 }
 
+/// Dequeues the next runnable thread, skipping any entry that was marked
+/// [`ThreadState::Exited`] (e.g. by [`terminate_process`]) while it was
+/// still sitting in the ready queue.
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn next_ready() -> Option<ThreadId> {
+    loop {
+        let candidate = dequeue()?;
+        if (*(&raw const THREADS))[candidate].state != ThreadState::Exited {
+            return Some(candidate);
+        }
+    }
+}
+
 #[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn schedule_from_scheduler() {
-    let next = dequeue().unwrap_or(IDLE_THREAD);
+    let next = next_ready().unwrap_or(IDLE_THREAD);
     CURRENT_THREAD = next;
     (*(&raw mut THREADS))[next].state = ThreadState::Running;
     scheduler_context_switch(
@@ -640,7 +778,7 @@ unsafe fn schedule_from_scheduler() {
 
 #[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn schedule_from_current(current: ThreadId) {
-    let next = dequeue().unwrap_or(IDLE_THREAD);
+    let next = next_ready().unwrap_or(IDLE_THREAD);
     if next == current {
         (*(&raw mut THREADS))[current].state = ThreadState::Running;
         return;
