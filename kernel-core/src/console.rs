@@ -25,8 +25,6 @@ const TTY_BUFFER_BYTES: usize = MAX_TTY_WIDTH * MAX_TTY_HEIGHT * 4;
 
 /// Scancodes for the modifier and function keys used by the Ctrl+Alt+Fn
 /// switch shortcut.
-const SCANCODE_CTRL_MAKE: u8 = 0x1D;
-const SCANCODE_CTRL_BREAK: u8 = 0x9D;
 const SCANCODE_ALT_MAKE: u8 = 0x38;
 const SCANCODE_ALT_BREAK: u8 = 0xB8;
 const SCANCODE_F1: u8 = 0x3B;
@@ -53,7 +51,6 @@ struct TtyStorage([[u8; TTY_BUFFER_BYTES]; TTY_COUNT]);
 static mut TTY_BUFFERS: TtyStorage = TtyStorage([const { [0; TTY_BUFFER_BYTES] }; TTY_COUNT]);
 static mut TTY_STATE: [TtyState; TTY_COUNT] = [TtyState::EMPTY; TTY_COUNT];
 static mut ACTIVE_TTY: usize = 0;
-static mut CTRL_HELD: bool = false;
 static mut ALT_HELD: bool = false;
 static mut PRIMARY_FRAMEBUFFER: Option<Framebuffer> = None;
 /// Off-screen per-tty buffers only fit resolutions up to
@@ -262,18 +259,11 @@ pub fn poll_user_key(tty: usize) -> Option<u8> {
 }
 
 /// Called from the keyboard IRQ handler for every scancode byte. Tracks
-/// Ctrl/Alt modifier state, switches the active tty on Ctrl+Alt+Fn, and
-/// otherwise queues the byte for whichever tty is currently active.
+/// Alt modifier state, switches the active tty on Alt+Fn (Ctrl+Alt+Fn also
+/// works, since Ctrl makes no difference here), and otherwise queues the
+/// byte for whichever tty is currently active.
 pub fn handle_scancode(byte: u8) {
     match byte {
-        SCANCODE_CTRL_MAKE => {
-            unsafe { CTRL_HELD = true };
-            return;
-        }
-        SCANCODE_CTRL_BREAK => {
-            unsafe { CTRL_HELD = false };
-            return;
-        }
         SCANCODE_ALT_MAKE => {
             unsafe { ALT_HELD = true };
             return;
@@ -284,8 +274,7 @@ pub fn handle_scancode(byte: u8) {
         }
         _ => {}
     }
-    let modifiers_held = unsafe { CTRL_HELD && ALT_HELD };
-    if modifiers_held && (SCANCODE_F1..SCANCODE_F1 + TTY_COUNT as u8).contains(&byte) {
+    if unsafe { ALT_HELD } && (SCANCODE_F1..SCANCODE_F1 + TTY_COUNT as u8).contains(&byte) {
         switch_tty((byte - SCANCODE_F1) as usize);
         return;
     }
