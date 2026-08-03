@@ -58,6 +58,15 @@ static ENTRY_POINT_REQUEST: EntryPointRequest =
 static REQUESTS_END: RequestsEndMarker = RequestsEndMarker::new();
 
 #[unsafe(no_mangle)]
+unsafe extern "C" fn strlen(value: *const u8) -> usize {
+    let mut length = 0;
+    while unsafe { value.add(length).read() } != 0 {
+        length += 1;
+    }
+    length
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn limine_entry() -> ! {
     enable_sse();
 
@@ -139,8 +148,8 @@ pub extern "C" fn limine_entry() -> ! {
         for module in response.modules() {
             let data =
                 unsafe { core::slice::from_raw_parts(module.addr() as *const u8, module.size() as usize) };
-            let name = match module.cmdline() {
-                "std-smoke" => "std-smoke",
+            let name = match module.string().to_bytes() {
+                b"std-smoke" => "std-smoke",
                 _ => "init",
             };
             let _ = kernel_core::register_boot_file(name, data);
