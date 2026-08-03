@@ -20,6 +20,11 @@ pub struct AhciController {
     pub device: PciDevice,
     pub abar: u64,
 }
+#[derive(Clone, Copy)]
+pub struct VirtioRngDevice {
+    pub device: PciDevice,
+    pub io_base: u16,
+}
 
 pub fn enumerate(mut visit: impl FnMut(PciDevice)) {
     for bus in 0..=u8::MAX {
@@ -60,6 +65,23 @@ pub fn find_ahci_controller() -> Option<AhciController> {
         }
     });
     controller
+}
+
+pub fn find_virtio_rng() -> Option<VirtioRngDevice> {
+    let mut result = None;
+    enumerate(|device| {
+        if result.is_some() || device.vendor_id != 0x1AF4 || device.device_id != 0x1005 {
+            return;
+        }
+        let bar = read_config(device.bus, device.device, device.function, 0x10);
+        if bar & 1 != 0 {
+            result = Some(VirtioRngDevice {
+                device,
+                io_base: (bar & !3) as u16,
+            });
+        }
+    });
+    result
 }
 
 pub fn enable_memory_and_bus_master(device: PciDevice) {

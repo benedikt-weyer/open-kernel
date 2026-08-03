@@ -420,6 +420,7 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         28 => syscall_futex_wait(pointer, length as u32, argument),
         29 => syscall_futex_wake(pointer, length),
         30 => syscall_set_tls_base(pointer),
+        31 => syscall_getrandom(pointer, length),
         _ => u64::MAX,
     }
 }
@@ -550,6 +551,16 @@ fn syscall_set_tls_base(base: u64) -> u64 {
         0
     } else {
         u64::MAX
+    }
+}
+
+fn syscall_getrandom(buffer: u64, length: u64) -> u64 {
+    let Some(output) = user_bytes_mut(buffer, length, 4096) else {
+        return u64::MAX;
+    };
+    match crate::fill_random(output) {
+        Ok(()) => length,
+        Err(_) => u64::MAX,
     }
 }
 

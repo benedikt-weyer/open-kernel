@@ -89,6 +89,7 @@ pub fn boot(info: BootInfo) -> ! {
         Err(crate::SataError::Timeout) => Com1.write(b"open-kernel: SATA reset timed out\r\n"),
         Err(_) => Com1.write(b"open-kernel: SATA unavailable\r\n"),
     }
+    crate::initialize_random();
     crate::initialize_mouse();
     let mut keyboard = Ps2KeyboardDriver::new();
     let _ = keyboard.initialize();

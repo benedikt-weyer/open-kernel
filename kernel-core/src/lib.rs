@@ -9,6 +9,7 @@ mod memory;
 mod mouse;
 mod pci;
 mod paging;
+mod random;
 #[path = "threads.rs"]
 mod scheduler;
 mod sata;
@@ -37,6 +38,7 @@ pub use memory::{
 };
 pub use mouse::{initialize as initialize_mouse, poll as poll_mouse, position as mouse_position};
 pub use pci::{AhciController, PciDevice, device_count as pci_device_count, enumerate as enumerate_pci, find_ahci_controller};
+pub use random::{RandomError, fill as fill_random, initialize as initialize_random};
 pub use paging::{
     DEVICE_WINDOW_BASE, FUTURE_USER_SPACE_BASE, KERNEL_STACK_GUARD_PAGE, PageFlags, PagingConfig,
     PagingError, allocate_kernel_stack, allocate_user_stack, initialize_virtual_memory, map_user_code_page, map_user_page,
