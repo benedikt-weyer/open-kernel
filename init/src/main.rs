@@ -33,6 +33,10 @@ struct Service {
 /// `start_order` resolves `depends_on` into an actual sequence, so adding a
 /// new daemon (e.g. a "network" service some other daemon should come
 /// after) is just another entry with the right `depends_on`.
+///
+/// The three `console-ttyN` entries autostart a shell on every switchable
+/// virtual terminal (Alt+F1..F3); their count must match
+/// `kernel_core::console::TTY_COUNT`.
 const SERVICES: &[Service] = &[
     Service {
         name: "selftest",
@@ -43,7 +47,7 @@ const SERVICES: &[Service] = &[
         restart: Restart::OnFailure,
     },
     Service {
-        name: "console",
+        name: "console-tty0",
         path: "/console",
         argv: &["tty:0"],
         depends_on: &["selftest"],
@@ -51,9 +55,17 @@ const SERVICES: &[Service] = &[
         restart: Restart::Always,
     },
     Service {
-        name: "console-tty2",
+        name: "console-tty1",
         path: "/console",
         argv: &["tty:1"],
+        depends_on: &["selftest"],
+        kind: Kind::Daemon,
+        restart: Restart::Always,
+    },
+    Service {
+        name: "console-tty2",
+        path: "/console",
+        argv: &["tty:2"],
         depends_on: &["selftest"],
         kind: Kind::Daemon,
         restart: Restart::Always,
