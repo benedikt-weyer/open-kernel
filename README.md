@@ -32,6 +32,23 @@ scripts/build-limine-iso
 The Limine protocol boots `limine-adapter` directly in 64-bit long mode. Its ISO
 is written to `build/open-kernel-limine.iso`.
 
+## Userspace Rust applications
+
+OpenKernel Rust applications can use ordinary `fn main()` and the custom `std`
+port. Add `openkernel-rt` as a dependency so the reusable CRT supplies the ELF
+entry point, TLS bootstrap, process exit, and freestanding C ABI intrinsics.
+
+```rust
+use openkernel_rt as _;
+
+fn main() {
+    println!("hello from OpenKernel");
+}
+```
+
+The Limine build packages the console and the `std-program` smoke-test. Run
+`run` in the console to launch the latter.
+
 ## Run it
 
 ```sh
