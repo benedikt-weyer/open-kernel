@@ -71,8 +71,13 @@ pub struct UserThread {
 
 impl UserThread {
     // The entry function owns its lifecycle and must invoke syscall 16 when done.
+    #[allow(dead_code)]
     pub fn spawn(entry: extern "C" fn(u64), argument: u64) -> Option<Self> {
-        let id = syscall3(15, entry as *const () as u64, argument, 0);
+        Self::spawn_with_tls(entry, argument, 0)
+    }
+
+    pub fn spawn_with_tls(entry: extern "C" fn(u64), argument: u64, tls_base: u64) -> Option<Self> {
+        let id = syscall3(15, entry as *const () as u64, argument, tls_base);
         (id != u64::MAX).then_some(Self { id })
     }
 

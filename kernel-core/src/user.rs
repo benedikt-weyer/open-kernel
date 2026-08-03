@@ -70,7 +70,7 @@ pub fn run_demo() -> Result<(), ElfError> {
     }
     loaded.stack_pointer = initialize_process_stack(loaded.stack_pointer);
     crate::scheduler::initialize_user_process();
-    crate::scheduler::spawn_user(loaded.entry, 0, Some(loaded.stack_pointer))
+    crate::scheduler::spawn_user(loaded.entry, 0, 0, Some(loaded.stack_pointer))
         .ok_or(PagingError::FrameAllocationFailed)?;
     crate::scheduler::start()
 }

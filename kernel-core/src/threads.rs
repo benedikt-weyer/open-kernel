@@ -38,12 +38,13 @@ pub struct UserContext {
     pub r13: u64,
     pub r14: u64,
     pub r15: u64,
+    pub fs_base: u64,
 }
 impl UserContext {
     pub const EMPTY: Self = Self {
         rip: 0, rsp: 0, rflags: 0x202, rax: 0, rbx: 0, rcx: 0, rdx: 0,
         rsi: 0, rdi: 0, rbp: 0, r8: 0, r9: 0, r10: 0, r11: 0, r12: 0,
-        r13: 0, r14: 0, r15: 0,
+        r13: 0, r14: 0, r15: 0, fs_base: 0,
     };
 }
 
@@ -103,9 +104,11 @@ struct Thread {
     stack_top: u64,
     syscall_stack_top: u64,
     stack_allocated: bool,
+    owns_user_stack: bool,
     reapable: bool,
     exit_status: u64,
-    join_waiter: usize,
+    join_waiters: [usize; MAX_THREADS],
+    join_waiter_count: usize,
 }
 impl Thread {
     const EMPTY: Self = Self {
@@ -119,9 +122,11 @@ impl Thread {
         stack_top: 0,
         syscall_stack_top: 0,
         stack_allocated: false,
+        owns_user_stack: false,
         reapable: true,
         exit_status: 0,
-        join_waiter: NO_THREAD,
+        join_waiters: [NO_THREAD; MAX_THREADS],
+        join_waiter_count: 0,
     };
 }
 
@@ -167,6 +172,21 @@ scheduler_context_switch:
     options(att_syntax)
 );
 
+unsafe fn release_resources(thread: &mut Thread, slot: usize) {
+    if !thread.stack_allocated {
+        return;
+    }
+    crate::release_kernel_stack(slot);
+    crate::release_kernel_stack(slot + MAX_THREADS);
+    if thread.owns_user_stack {
+        crate::release_user_stack(slot);
+    }
+    thread.stack_top = 0;
+    thread.syscall_stack_top = 0;
+    thread.stack_allocated = false;
+    thread.owns_user_stack = false;
+}
+
 pub fn spawn(entry: TaskEntry) -> Option<ThreadId> {
     unsafe {
         for slot in 1..MAX_THREADS {
@@ -174,6 +194,7 @@ pub fn spawn(entry: TaskEntry) -> Option<ThreadId> {
             if thread.state != ThreadState::Exited || !thread.reapable {
                 continue;
             }
+            release_resources(thread, slot);
             if !thread.stack_allocated {
                 thread.stack_top = crate::allocate_kernel_stack(slot).ok()?;
                 thread.syscall_stack_top = crate::allocate_kernel_stack(slot + MAX_THREADS).ok()?;
@@ -197,9 +218,11 @@ pub fn spawn(entry: TaskEntry) -> Option<ThreadId> {
                 stack_top,
                 syscall_stack_top,
                 stack_allocated: true,
+                owns_user_stack: false,
                 reapable: false,
                 exit_status: 0,
-                join_waiter: NO_THREAD,
+                join_waiters: [NO_THREAD; MAX_THREADS],
+                join_waiter_count: 0,
             };
             enqueue(slot);
             return Some(slot);
@@ -216,8 +239,13 @@ pub fn initialize_user_process() {
     }
 }
 
-pub fn spawn_user(entry: u64, argument: u64, initial_stack: Option<u64>) -> Option<ThreadId> {
-    if !crate::is_user_executable(entry) {
+pub fn spawn_user(
+    entry: u64,
+    argument: u64,
+    tls_base: u64,
+    initial_stack: Option<u64>,
+) -> Option<ThreadId> {
+    if !crate::is_user_executable(entry) || (tls_base != 0 && !crate::is_user_mapped(tls_base)) {
         return None;
     }
     unsafe {
@@ -226,14 +254,15 @@ pub fn spawn_user(entry: u64, argument: u64, initial_stack: Option<u64>) -> Opti
             if thread.state != ThreadState::Exited || !thread.reapable {
                 continue;
             }
+            release_resources(thread, slot);
             if !thread.stack_allocated {
                 thread.stack_top = crate::allocate_kernel_stack(slot).ok()?;
                 thread.syscall_stack_top = crate::allocate_kernel_stack(slot + MAX_THREADS).ok()?;
                 thread.stack_allocated = true;
             }
-            let user_stack = match initial_stack {
-                Some(stack) => stack,
-                None => crate::allocate_user_stack(slot).ok()?.checked_sub(8)?,
+            let (user_stack, owns_user_stack) = match initial_stack {
+                Some(stack) => (stack, false),
+                None => (crate::allocate_user_stack(slot).ok()?.checked_sub(8)?, true),
             };
             let stack_top = thread.stack_top;
             let syscall_stack_top = thread.syscall_stack_top;
@@ -247,6 +276,7 @@ pub fn spawn_user(entry: u64, argument: u64, initial_stack: Option<u64>) -> Opti
                     rip: entry,
                     rsp: user_stack,
                     rdi: argument,
+                    fs_base: tls_base,
                     ..UserContext::EMPTY
                 },
                 is_user: true,
@@ -255,9 +285,11 @@ pub fn spawn_user(entry: u64, argument: u64, initial_stack: Option<u64>) -> Opti
                 stack_top,
                 syscall_stack_top,
                 stack_allocated: true,
+                owns_user_stack,
                 reapable: false,
                 exit_status: 0,
-                join_waiter: NO_THREAD,
+                join_waiters: [NO_THREAD; MAX_THREADS],
+                join_waiter_count: 0,
             };
             enqueue(slot);
             return Some(slot);
@@ -327,9 +359,8 @@ pub fn exit_current_with_status(status: u64) -> ! {
             task.entry = None;
             task.exit_status = status;
             task.reapable = !task.is_user;
-            if task.join_waiter != NO_THREAD {
-                let waiter = task.join_waiter;
-                task.join_waiter = NO_THREAD;
+            for waiter_index in 0..task.join_waiter_count {
+                let waiter = task.join_waiters[waiter_index];
                 let waiting = &mut (*(&raw mut THREADS))[waiter];
                 if waiting.state == ThreadState::Blocked {
                     waiting.state = ThreadState::Ready;
@@ -350,19 +381,27 @@ pub fn join(thread: ThreadId) -> Option<u64> {
         }
         let target = &mut (*(&raw mut THREADS))[thread];
         if target.state == ThreadState::Exited {
-            target.reapable = true;
+            if target.join_waiter_count == 0 {
+                target.reapable = true;
+            }
             return Some(target.exit_status);
         }
-        if target.join_waiter != NO_THREAD {
+        if target.join_waiter_count == MAX_THREADS {
             return None;
         }
-        target.join_waiter = current;
+        target.join_waiters[target.join_waiter_count] = current;
+        target.join_waiter_count += 1;
         block_current();
         let target = &mut (*(&raw mut THREADS))[thread];
         if target.state != ThreadState::Exited {
             return None;
         }
-        target.reapable = true;
+        if target.join_waiter_count != 0 {
+            target.join_waiter_count -= 1;
+        }
+        if target.join_waiter_count == 0 {
+            target.reapable = true;
+        }
         Some(target.exit_status)
     }
 }
@@ -430,6 +469,17 @@ pub fn current_user_context() -> *const UserContext {
             core::ptr::null()
         } else {
             &raw const (*(&raw const THREADS))[thread].user_context
+        }
+    }
+}
+
+pub fn current_user_fs_base() -> u64 {
+    unsafe {
+        let thread = CURRENT_THREAD;
+        if thread == NO_THREAD || !(*(&raw const THREADS))[thread].is_user {
+            0
+        } else {
+            (*(&raw const THREADS))[thread].user_context.fs_base
         }
     }
 }

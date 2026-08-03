@@ -95,6 +95,7 @@ static ALLOCATOR: BrkAllocator = BrkAllocator::new();
 static SYNC_MUTEX: UserMutex = UserMutex::new();
 static SYNC_CONDITION: UserCondvar = UserCondvar::new();
 static SYNC_VALUE: AtomicU32 = AtomicU32::new(0);
+static TLS_WORD: u64 = 0x544C_535F_4F4B_0001;
 
 #[unsafe(no_mangle)]
 extern "C" fn _start() -> ! {
@@ -184,7 +185,11 @@ extern "C" fn _start() -> ! {
 
 fn synchronization_test() {
     SYNC_VALUE.store(0, Ordering::Release);
-    let Some(worker) = UserThread::spawn(synchronization_worker, 0) else {
+    let Some(worker) = UserThread::spawn_with_tls(
+        synchronization_worker,
+        0,
+        (&raw const TLS_WORD) as *const u64 as u64,
+    ) else {
         write(b"SYNC THREAD FAILED\r\n");
         return;
     };
@@ -201,14 +206,25 @@ fn synchronization_test() {
 }
 
 extern "C" fn synchronization_worker(_: u64) {
+    let first_tls_word = read_tls_word();
     SYNC_MUTEX.lock();
     SYNC_VALUE.store(1, Ordering::Release);
     SYNC_CONDITION.notify_one();
     SYNC_MUTEX.unlock();
-    syscall1(16, 0);
+    syscall0(2);
+    let status = u64::from(first_tls_word != TLS_WORD || read_tls_word() != TLS_WORD);
+    syscall1(16, status);
     loop {
         core::hint::spin_loop();
     }
+}
+
+fn read_tls_word() -> u64 {
+    let value: u64;
+    unsafe {
+        asm!("mov {}, qword ptr fs:[0]", out(reg) value, options(nostack, readonly));
+    }
+    value
 }
 
 fn time_test() {

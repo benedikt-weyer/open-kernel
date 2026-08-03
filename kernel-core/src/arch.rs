@@ -11,6 +11,7 @@ const IA32_EFER: u32 = 0xC000_0080;
 const IA32_STAR: u32 = 0xC000_0081;
 const IA32_LSTAR: u32 = 0xC000_0082;
 const IA32_FMASK: u32 = 0xC000_0084;
+const IA32_FS_BASE: u32 = 0xC000_0100;
 const SYSCALL_STACK_SIZE: usize = 16 * 1024;
 const PIT_HZ: u64 = 100;
 const MAX_SLEEPERS: usize = 8;
@@ -312,6 +313,7 @@ pub fn set_user_kernel_stack(stack_top: u64) {
 
 pub unsafe fn resume_user_context(context: *const crate::scheduler::UserContext) -> ! {
     set_user_kernel_stack(crate::scheduler::current_kernel_stack_top());
+    unsafe { write_msr(IA32_FS_BASE, (*context).fs_base) };
     unsafe {
         asm!(
             "push {user_data}",
@@ -356,9 +358,9 @@ extern "C" fn scheduler_save_syscall_state() {
         flags: unsafe { core::ptr::read_volatile(&raw const USER_SYSCALL_RFLAGS) },
     });
     unsafe {
-        crate::scheduler::save_user_context(core::ptr::read_volatile(
-            &raw const USER_SYSCALL_CONTEXT,
-        ));
+        let mut context = core::ptr::read_volatile(&raw const USER_SYSCALL_CONTEXT);
+        context.fs_base = read_msr(IA32_FS_BASE);
+        crate::scheduler::save_user_context(context);
     }
 }
 
@@ -370,6 +372,7 @@ extern "C" fn scheduler_current_syscall_state() -> *const crate::scheduler::Sysc
 #[unsafe(no_mangle)]
 extern "C" fn scheduler_set_tss_stack() {
     set_user_kernel_stack(crate::scheduler::current_kernel_stack_top());
+    unsafe { write_msr(IA32_FS_BASE, crate::scheduler::current_user_fs_base()) };
 }
 
 #[unsafe(no_mangle)]
@@ -401,7 +404,7 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         12 => syscall_sata_read(),
         13 => syscall_pci_status(),
         14 => syscall_lsblk(),
-        15 => syscall_thread_create(pointer, length),
+        15 => syscall_thread_create(pointer, length, argument),
         16 => crate::scheduler::exit_current_with_status(pointer),
         17 => crate::scheduler::join(pointer as usize).unwrap_or(u64::MAX),
         18 => crate::user::brk(pointer),
@@ -424,8 +427,8 @@ fn syscall_spawn() -> u64 {
     u64::MAX
 }
 
-fn syscall_thread_create(entry: u64, argument: u64) -> u64 {
-    crate::scheduler::spawn_user(entry, argument, None)
+fn syscall_thread_create(entry: u64, argument: u64, tls_base: u64) -> u64 {
+    crate::scheduler::spawn_user(entry, argument, tls_base, None)
         .map(|thread| thread as u64)
         .unwrap_or(u64::MAX)
 }

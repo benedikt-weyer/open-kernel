@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::allocate_physical_frame;
+use crate::{allocate_physical_frame, free_physical_frame};
 
 const ENTRY_ADDRESS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 const PRESENT: u64 = 1 << 0;
@@ -152,6 +152,17 @@ pub fn allocate_kernel_stack(slot: usize) -> Result<u64, PagingError> {
     Ok(stack_base + KERNEL_STACK_PAGES * PAGE_SIZE)
 }
 
+pub fn release_kernel_stack(slot: usize) {
+    let stack_base = KERNEL_STACK_GUARD_PAGE
+        + (slot as u64) * (KERNEL_STACK_PAGES + 1) * PAGE_SIZE
+        + PAGE_SIZE;
+    for page in 0..KERNEL_STACK_PAGES {
+        if let Some(frame) = unmap_page(stack_base + page * PAGE_SIZE) {
+            free_physical_frame(frame);
+        }
+    }
+}
+
 pub fn allocate_user_stack(slot: usize) -> Result<u64, PagingError> {
     // Leave one unmapped page below each downward-growing stack as a guard.
     let stack_top = USER_SPACE_END - PAGE_SIZE - (slot as u64) * (USER_STACK_PAGES + 1) * PAGE_SIZE;
@@ -162,6 +173,15 @@ pub fn allocate_user_stack(slot: usize) -> Result<u64, PagingError> {
         map_user_page_with_flags(address, frame, PageFlags::UserReadWrite)?;
     }
     Ok(stack_top)
+}
+
+pub fn release_user_stack(slot: usize) {
+    let stack_top = USER_SPACE_END - PAGE_SIZE - (slot as u64) * (USER_STACK_PAGES + 1) * PAGE_SIZE;
+    for page in 1..=USER_STACK_PAGES {
+        if let Some(frame) = unmap_page(stack_top - page * PAGE_SIZE) {
+            free_physical_frame(frame);
+        }
+    }
 }
 
 pub fn is_user_executable(virtual_address: u64) -> bool {
@@ -184,6 +204,28 @@ pub fn is_user_executable(virtual_address: u64) -> bool {
     }
     let leaf = table.0[indices[3] as usize];
     leaf & (PRESENT | USER) == (PRESENT | USER) && leaf & NO_EXECUTE == 0
+}
+
+pub fn is_user_mapped(virtual_address: u64) -> bool {
+    if virtual_address < FUTURE_USER_SPACE_BASE || virtual_address >= USER_SPACE_END {
+        return false;
+    }
+    let indices = [
+        (virtual_address >> 39) & 0x1FF,
+        (virtual_address >> 30) & 0x1FF,
+        (virtual_address >> 21) & 0x1FF,
+        (virtual_address >> 12) & 0x1FF,
+    ];
+    let mut table = unsafe { table_mut(read_cr3() & ENTRY_ADDRESS_MASK) };
+    for index in indices[..3].iter().copied() {
+        let entry = table.0[index as usize];
+        if entry & (PRESENT | USER | HUGE_PAGE) != (PRESENT | USER) {
+            return false;
+        }
+        table = unsafe { table_mut(entry & ENTRY_ADDRESS_MASK) };
+    }
+    let leaf = table.0[indices[3] as usize];
+    leaf & (PRESENT | USER) == (PRESENT | USER)
 }
 
 fn map_page(
@@ -218,6 +260,33 @@ fn map_page(
         asm!("invlpg [{}]", in(reg) virtual_address, options(nostack));
     }
     Ok(())
+}
+
+fn unmap_page(virtual_address: u64) -> Option<u64> {
+    let indices = [
+        (virtual_address >> 39) & 0x1FF,
+        (virtual_address >> 30) & 0x1FF,
+        (virtual_address >> 21) & 0x1FF,
+        (virtual_address >> 12) & 0x1FF,
+    ];
+    let mut table = unsafe { table_mut(read_cr3() & ENTRY_ADDRESS_MASK) };
+    for index in indices[..3].iter().copied() {
+        let entry = table.0[index as usize];
+        if entry & PRESENT == 0 || entry & HUGE_PAGE != 0 {
+            return None;
+        }
+        table = unsafe { table_mut(entry & ENTRY_ADDRESS_MASK) };
+    }
+    let leaf = &mut table.0[indices[3] as usize];
+    if *leaf & PRESENT == 0 {
+        return None;
+    }
+    let frame = *leaf & ENTRY_ADDRESS_MASK;
+    *leaf = 0;
+    unsafe {
+        asm!("invlpg [{}]", in(reg) virtual_address, options(nostack));
+    }
+    Some(frame)
 }
 
 unsafe fn table_mut(physical_address: u64) -> &'static mut PageTable {

@@ -40,7 +40,8 @@ pub use pci::{AhciController, PciDevice, device_count as pci_device_count, enume
 pub use paging::{
     DEVICE_WINDOW_BASE, FUTURE_USER_SPACE_BASE, KERNEL_STACK_GUARD_PAGE, PageFlags, PagingConfig,
     PagingError, allocate_kernel_stack, allocate_user_stack, initialize_virtual_memory, map_user_code_page, map_user_page,
-    is_user_executable, map_device_page, map_user_page_with_flags, physical_to_virtual, write_physical_frame,
+    is_user_executable, is_user_mapped, map_device_page, map_user_page_with_flags, physical_to_virtual, release_kernel_stack,
+    release_user_stack, write_physical_frame,
     zero_physical_frame,
 };
 pub use scheduler::{
