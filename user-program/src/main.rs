@@ -115,6 +115,7 @@ fn run_command(command: &str) {
         "sync" => synchronization_test(),
         "run" => run_std_smoke(),
         "ls" => list_root(),
+        "pty" => pty_demo(),
         _ => eprint!("UNKNOWN COMMAND\r\n"),
     }
 }
@@ -132,8 +133,47 @@ fn complete(input: &str) -> Option<&'static str> {
     matched.filter(|command| command.len() > input.len())
 }
 
+/// Opens a pty, spawns a second console instance attached to its slave
+/// side, drives it as if someone typed `help` there, and prints back
+/// whatever it wrote — a self-contained loopback demo of the master/slave
+/// split, since this console is the only interactive program to drive it
+/// with right now.
+fn pty_demo() {
+    let Some(id) = syscall::open_pty() else {
+        eprint!("PTY OPEN FAILED\r\n");
+        return;
+    };
+    let argument = format!("pty:{id}");
+    let Some(child) = syscall::spawn_process("/console", Some(&argument)) else {
+        eprint!("PTY SPAWN FAILED\r\n");
+        syscall::close_pty(id);
+        return;
+    };
+    syscall::sleep_ms(50);
+    syscall::write_pty_master(id, b"help\r\n");
+    syscall::sleep_ms(50);
+
+    let mut output = Vec::new();
+    let mut chunk = [0_u8; 256];
+    for _ in 0..5 {
+        match syscall::read_pty_master(id, &mut chunk) {
+            Some(0) => {
+                syscall::sleep_ms(50);
+            }
+            Some(count) => output.extend_from_slice(&chunk[..count]),
+            None => break,
+        }
+    }
+
+    syscall::terminate_process(child);
+    syscall::wait_process(child);
+    syscall::close_pty(id);
+
+    eprint!("PTY CHILD SAID:\r\n{}\r\n", String::from_utf8_lossy(&output).replace('\n', "\r\n"));
+}
+
 fn run_std_smoke() {
-    let Some(process) = syscall::spawn_process("/std-smoke") else {
+    let Some(process) = syscall::spawn_process("/std-smoke", None) else {
         eprint!("SPAWN FAILED\r\n");
         return;
     };
