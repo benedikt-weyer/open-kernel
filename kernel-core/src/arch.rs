@@ -419,6 +419,7 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument:
         27 => monotonic_milliseconds(),
         28 => syscall_futex_wait(pointer, length as u32, argument),
         29 => syscall_futex_wake(pointer, length),
+        30 => syscall_set_tls_base(pointer),
         _ => u64::MAX,
     }
 }
@@ -542,6 +543,14 @@ fn syscall_futex_wake(address: u64, count: u64) -> u64 {
         }
     }
     woken
+}
+
+fn syscall_set_tls_base(base: u64) -> u64 {
+    if crate::scheduler::set_current_user_fs_base(base) {
+        0
+    } else {
+        u64::MAX
+    }
 }
 
 fn syscall_write(pointer: u64, length: u64) -> u64 {

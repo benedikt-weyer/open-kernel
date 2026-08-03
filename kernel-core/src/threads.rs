@@ -484,6 +484,20 @@ pub fn current_user_fs_base() -> u64 {
     }
 }
 
+pub fn set_current_user_fs_base(base: u64) -> bool {
+    unsafe {
+        let thread = CURRENT_THREAD;
+        if thread == NO_THREAD || !(*(&raw const THREADS))[thread].is_user {
+            return false;
+        }
+        if base != 0 && !crate::is_user_mapped(base) {
+            return false;
+        }
+        (*(&raw mut THREADS))[thread].user_context.fs_base = base;
+        true
+    }
+}
+
 pub fn current_kernel_stack_top() -> u64 {
     unsafe {
         let thread = CURRENT_THREAD;
