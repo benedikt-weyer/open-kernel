@@ -27,7 +27,7 @@ cargo rustc --manifest-path "$ROOT_DIR/multiboot2-adapter/Cargo.toml" --release 
     -C link-arg=-z -C link-arg=max-page-size=0x1000
 cargo rustc --manifest-path "$ROOT_DIR/user-program/Cargo.toml" --release \
     --bin user-program -- \
-    -C relocation-model=static -C linker=ld -C link-arg=-melf_x86_64 \
+    -C relocation-model=static -C code-model=large -C linker=ld -C link-arg=-melf_x86_64 \
     -C link-arg=-T"$ROOT_DIR/user-linker.ld" -C link-arg=-nostdlib \
     -C link-arg=-z -C link-arg=max-page-size=0x1000
 cp "$ROOT_DIR/target/release/multiboot2-adapter" "$KERNEL"

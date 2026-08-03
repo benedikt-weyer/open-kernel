@@ -10,6 +10,15 @@ use crate::{
 
 const VGA_TEXT_BUFFER: *mut u16 = 0xB8000 as *mut u16;
 const VGA_COLOR: u16 = 0x0F00;
+const USER_CONSOLE_BACKGROUND: u32 = 0x0016_2D3D;
+const USER_CONSOLE_FOREGROUND: u32 = 0x00FF_FFFF;
+const USER_CONSOLE_MARGIN: usize = 32;
+const USER_CONSOLE_SCALE: usize = 2;
+const USER_CONSOLE_LINE_HEIGHT: usize = 16;
+const USER_CONSOLE_CHARACTER_WIDTH: usize = 12;
+static mut USER_FRAMEBUFFER: Option<Framebuffer> = None;
+static mut USER_CURSOR_X: usize = USER_CONSOLE_MARGIN;
+static mut USER_CURSOR_Y: usize = USER_CONSOLE_MARGIN;
 
 pub enum Display {
     None,
@@ -17,6 +26,7 @@ pub enum Display {
     Framebuffer(Framebuffer),
 }
 
+#[derive(Clone, Copy)]
 pub struct Framebuffer {
     address: *mut u8,
     width: usize,
@@ -81,6 +91,9 @@ pub fn boot(info: BootInfo) -> ! {
     Com1.write_usize(memory.tracked_frames);
     Com1.write(b"\r\n");
 
+    if let Display::Framebuffer(framebuffer) = info.display {
+        enable_user_console(framebuffer);
+    }
     if matches!(info.status, BootStatus::Ready) {
         if crate::user::run_demo().is_err() {
             Com1.write(b"open-kernel: could not start user process\r\n");
@@ -106,6 +119,103 @@ pub fn boot(info: BootInfo) -> ! {
     }
 
     X86_64::halt()
+}
+
+pub fn user_console_write(text: &[u8]) {
+    let Some(framebuffer) = (unsafe { core::ptr::read_volatile(&raw const USER_FRAMEBUFFER) }) else {
+        return;
+    };
+    for byte in text {
+        match *byte {
+            b'\r' => {}
+            b'\n' => user_console_newline(&framebuffer),
+            byte => {
+                let x = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_X) };
+                let y = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_Y) };
+                if x + USER_CONSOLE_CHARACTER_WIDTH > framebuffer.width {
+                    user_console_newline(&framebuffer);
+                }
+                let x = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_X) };
+                draw_framebuffer_text(
+                    &framebuffer,
+                    core::slice::from_ref(&byte),
+                    x,
+                    y,
+                    USER_CONSOLE_SCALE,
+                    USER_CONSOLE_FOREGROUND,
+                );
+                unsafe {
+                    core::ptr::write_volatile(
+                        &raw mut USER_CURSOR_X,
+                        x + USER_CONSOLE_CHARACTER_WIDTH,
+                    );
+                }
+            }
+        }
+    }
+}
+
+pub fn user_console_clear() {
+    let Some(framebuffer) = (unsafe { core::ptr::read_volatile(&raw const USER_FRAMEBUFFER) }) else {
+        return;
+    };
+    for row in 0..framebuffer.height {
+        for column in 0..framebuffer.width {
+            put_framebuffer_pixel(&framebuffer, column, row, USER_CONSOLE_BACKGROUND);
+        }
+    }
+    unsafe {
+        core::ptr::write_volatile(&raw mut USER_CURSOR_X, USER_CONSOLE_MARGIN);
+        core::ptr::write_volatile(&raw mut USER_CURSOR_Y, USER_CONSOLE_MARGIN);
+    }
+}
+
+pub fn user_console_backspace() {
+    let Some(framebuffer) = (unsafe { core::ptr::read_volatile(&raw const USER_FRAMEBUFFER) }) else {
+        return;
+    };
+    let x = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_X) };
+    if x <= USER_CONSOLE_MARGIN {
+        return;
+    }
+    let previous_x = x - USER_CONSOLE_CHARACTER_WIDTH;
+    let y = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_Y) };
+    for pixel_y in 0..USER_CONSOLE_LINE_HEIGHT {
+        for pixel_x in 0..USER_CONSOLE_CHARACTER_WIDTH {
+            put_framebuffer_pixel(
+                &framebuffer,
+                previous_x + pixel_x,
+                y + pixel_y,
+                USER_CONSOLE_BACKGROUND,
+            );
+        }
+    }
+    unsafe {
+        core::ptr::write_volatile(&raw mut USER_CURSOR_X, previous_x);
+    }
+}
+
+pub fn poll_user_key() -> Option<u8> {
+    decode_scancode(crate::arch::take_keyboard_scancode()?)
+}
+
+fn enable_user_console(framebuffer: Framebuffer) {
+    unsafe {
+        core::ptr::write_volatile(&raw mut USER_FRAMEBUFFER, Some(framebuffer));
+    }
+    user_console_clear();
+}
+
+fn user_console_newline(framebuffer: &Framebuffer) {
+    let next_y = unsafe { core::ptr::read_volatile(&raw const USER_CURSOR_Y) + USER_CONSOLE_LINE_HEIGHT };
+    if next_y + USER_CONSOLE_LINE_HEIGHT > framebuffer.height {
+        user_console_clear();
+        return;
+    }
+    unsafe {
+        core::ptr::write_volatile(&raw mut USER_CURSOR_X, USER_CONSOLE_MARGIN);
+        core::ptr::write_volatile(&raw mut USER_CURSOR_Y, next_y);
+    }
 }
 
 fn paint_vga(bootloader: &[u8], status: BootStatus) {

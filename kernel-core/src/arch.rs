@@ -315,6 +315,15 @@ extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64) -> u64 {
         }
         4 => syscall_spawn(),
         5 => syscall_sleep(pointer),
+        6 => crate::console::poll_user_key().map(u64::from).unwrap_or(0),
+        7 => {
+            crate::console::user_console_clear();
+            0
+        }
+        8 => {
+            crate::console::user_console_backspace();
+            0
+        }
         _ => u64::MAX,
     }
 }
@@ -342,16 +351,16 @@ fn syscall_sleep(ticks: u64) -> u64 {
 }
 
 fn syscall_write(pointer: u64, length: u64) -> u64 {
-    const USER_DATA_START: u64 = crate::FUTURE_USER_SPACE_BASE + crate::PAGE_SIZE;
-    const USER_DATA_END: u64 = USER_DATA_START + crate::PAGE_SIZE;
+    const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
     let Some(end) = pointer.checked_add(length) else {
         return u64::MAX;
     };
-    if pointer < USER_DATA_START || end > USER_DATA_END || length > 256 {
+    if pointer < crate::FUTURE_USER_SPACE_BASE || end > USER_SPACE_END || length > 256 {
         return u64::MAX;
     }
     let bytes = unsafe { core::slice::from_raw_parts(pointer as *const u8, length as usize) };
     Com1.write(bytes);
+    crate::console::user_console_write(bytes);
     length
 }
 
