@@ -233,7 +233,7 @@ fn complete_command(
     response: &mut [u8; 80],
     response_length: &mut usize,
 ) -> bool {
-    const COMMANDS: [&[u8]; 5] = [b"help", b"clear", b"resolution", b"bootloader", b"halt"];
+    const COMMANDS: [&[u8]; 6] = [b"help", b"clear", b"resolution", b"bootloader", b"halt", b"shutdown"];
     let mut match_command = None;
 
     for command in COMMANDS {
@@ -373,7 +373,7 @@ fn run_console_command(
 ) -> usize {
     match input {
         b"" => 0,
-        b"help" => copy_text(response, b"HELP CLEAR RESOLUTION BOOTLOADER HALT"),
+        b"help" => copy_text(response, b"HELP CLEAR RESOLUTION BOOTLOADER HALT SHUTDOWN"),
         b"clear" => 0,
         b"resolution" => {
             let mut length = copy_text(response, b"RESOLUTION ");
@@ -391,6 +391,7 @@ fn run_console_command(
             length
         }
         b"halt" => X86_64::halt(),
+        b"shutdown" => crate::shutdown(),
         _ => copy_text(response, b"UNKNOWN COMMAND"),
     }
 }

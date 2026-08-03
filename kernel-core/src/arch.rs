@@ -158,6 +158,11 @@ pub fn take_keyboard_scancode() -> Option<u8> {
     Some(scancode)
 }
 
+pub fn shutdown() -> ! {
+    unsafe { outw(0x604, 0x2000); }
+    X86_64::halt()
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn irq_dispatch(vector: u64) {
     unsafe {
@@ -235,5 +240,11 @@ unsafe fn inb(port: u16) -> u8 {
 unsafe fn outb(port: u16, value: u8) {
     unsafe {
         asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack));
+    }
+}
+
+unsafe fn outw(port: u16, value: u16) {
+    unsafe {
+        asm!("out dx, ax", in("dx") port, in("ax") value, options(nomem, nostack));
     }
 }

@@ -17,6 +17,7 @@ use core::panic::PanicInfo;
 use serial::{Com1, SerialOutput};
 
 pub use arch::timer_ticks;
+pub use arch::shutdown;
 pub use console::{BootInfo, BootStatus, Display, Framebuffer, boot};
 pub use drivers::{Driver, DriverError, LoopbackNetworkDriver, NetworkDriver};
 pub use keyboard::Ps2KeyboardDriver;
