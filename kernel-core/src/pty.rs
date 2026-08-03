@@ -20,6 +20,15 @@ struct Ring {
 impl Ring {
     const EMPTY: Self = Self { buffer: [0; RING_CAPACITY], head: 0, count: 0 };
 
+    /// Only `head`/`count` need resetting: bytes past `count` are never
+    /// read, so there's no need to clear the backing array, which would
+    /// otherwise be a 256-byte copy this freestanding, `-nostdlib` binary
+    /// has no `memset` to lower it into.
+    fn reset(&mut self) {
+        self.head = 0;
+        self.count = 0;
+    }
+
     fn push(&mut self, byte: u8) -> bool {
         if self.count == RING_CAPACITY {
             return false;
@@ -64,7 +73,10 @@ pub fn open() -> Option<usize> {
     unsafe {
         for (index, pty) in (*(&raw mut PTYS)).iter_mut().enumerate() {
             if !pty.allocated {
-                *pty = Pty { allocated: true, owner: Some(owner), ..Pty::EMPTY };
+                pty.allocated = true;
+                pty.owner = Some(owner);
+                pty.to_master.reset();
+                pty.to_slave.reset();
                 return Some(index);
             }
         }
@@ -87,7 +99,10 @@ pub fn close(id: usize) -> bool {
         if !pty.allocated || pty.owner != Some(owner) {
             return false;
         }
-        *pty = Pty::EMPTY;
+        pty.allocated = false;
+        pty.owner = None;
+        pty.to_master.reset();
+        pty.to_slave.reset();
     }
     true
 }
