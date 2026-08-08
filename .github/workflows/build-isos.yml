@@ -63,7 +63,7 @@ jobs:
 
       - name: Checkout rust-open-kernel
         run: |
-          git clone --depth 1 https://github.com/benedikt-weyer/rust-open-kernel.git \
+          git clone --depth 1 --branch open-kernel https://github.com/benedikt-weyer/rust-open-kernel.git \
             /home/benedikt/Git/forks/rust-open-kernel
           git -C /home/benedikt/Git/forks/rust-open-kernel submodule update --init --depth 1 src/llvm-project
 
