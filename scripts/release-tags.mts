@@ -34,7 +34,7 @@ type GithubOutputs = {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../..');
+const repoRoot = path.resolve(__dirname, '..');
 const dryRun = process.env.RELEASE_TAGS_DRY_RUN === '1';
 
 function runGit(args: string[], options: ExecFileSyncOptions = {}) {
