@@ -61,9 +61,13 @@ jobs:
           sudo mkdir -p /home/benedikt/Git/forks
           sudo chown -R "$(id -u):$(id -g)" /home/benedikt
 
+      # bootstrap's download-ci-llvm freshness check walks commit history to
+      # find when LLVM-affecting paths last changed, so this needs full
+      # history rather than a shallow clone (a shallow clone makes that walk
+      # fail with "ambiguous argument 'HEAD^1'").
       - name: Checkout rust-open-kernel
         run: |
-          git clone --depth 1 --branch open-kernel https://github.com/benedikt-weyer/rust-open-kernel.git \
+          git clone --single-branch --branch open-kernel https://github.com/benedikt-weyer/rust-open-kernel.git \
             /home/benedikt/Git/forks/rust-open-kernel
           git -C /home/benedikt/Git/forks/rust-open-kernel submodule update --init --depth 1 src/llvm-project
 
