@@ -1,0 +1,102 @@
+name: Build ISOs
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: build-isos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-tags:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      final_tag: ${{ steps.release.outputs.final_tag }}
+      final_commit: ${{ steps.release.outputs.final_commit }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: release
+        run: node scripts/release-tags.mts
+
+  build-isos:
+    needs: release-tags
+    if: needs.release-tags.outputs.final_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    steps:
+      # The stage1 rustc + LLVM build below is large; free up runner disk
+      # before doing anything else.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+          large-packages: false
+
+      - name: Checkout open-kernel
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-tags.outputs.final_commit }}
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Enable Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # scripts/build-iso and scripts/build-limine-iso hard-code this path
+      # for the OpenKernel rustc fork, so it must be checked out there.
+      - name: Prepare rust-open-kernel checkout path
+        run: |
+          sudo mkdir -p /home/benedikt/Git/forks
+          sudo chown -R "$(id -u):$(id -g)" /home/benedikt
+
+      - name: Checkout rust-open-kernel
+        run: |
+          git clone --depth 1 https://github.com/benedikt-weyer/rust-open-kernel.git \
+            /home/benedikt/Git/forks/rust-open-kernel
+          git -C /home/benedikt/Git/forks/rust-open-kernel submodule update --init --depth 1 src/llvm-project
+
+      - name: Determine rust-open-kernel commit
+        id: rust-fork
+        working-directory: /home/benedikt/Git/forks/rust-open-kernel
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Building the OpenKernel stage1 rustc (and the LLVM it links against)
+      # from scratch is the expensive part of this job, so cache the
+      # resulting stage1 sysroot keyed on the fork's commit.
+      - name: Cache OpenKernel stage1 rustc
+        id: stage1-cache
+        uses: actions/cache@v4
+        with:
+          path: /home/benedikt/Git/forks/rust-open-kernel/build/x86_64-unknown-linux-gnu/stage1
+          key: stage1-rustc-${{ steps.rust-fork.outputs.sha }}
+
+      - name: Build OpenKernel stage1 rustc
+        if: steps.stage1-cache.outputs.cache-hit != 'true'
+        working-directory: /home/benedikt/Git/forks/rust-open-kernel
+        run: nix develop --command ./x build --stage 1 compiler/rustc
+
+      - name: Build GRUB ISO
+        run: nix develop --command scripts/build-iso
+
+      - name: Build Limine ISO
+        run: nix develop --command scripts/build-limine-iso
+
+      - name: Release ISOs
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release-tags.outputs.final_tag }}
+          files: |
+            build/open-kernel.iso
+            build/open-kernel-limine.iso
