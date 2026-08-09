@@ -376,6 +376,24 @@ extern "C" fn scheduler_set_tss_stack() {
 
 #[unsafe(no_mangle)]
 extern "C" fn syscall_dispatch(number: u64, pointer: u64, length: u64, argument: u64) -> u64 {
+    {
+        static mut SYSCALL_COUNT: u64 = 0;
+        let count = unsafe {
+            SYSCALL_COUNT += 1;
+            SYSCALL_COUNT
+        };
+        if count <= 40 {
+            Com1.write(b"debug: syscall #");
+            Com1.write_usize(count as usize);
+            Com1.write(b" number=");
+            Com1.write_usize(number as usize);
+            Com1.write(b" pointer=");
+            Com1.write_usize(pointer as usize);
+            Com1.write(b" length=");
+            Com1.write_usize(length as usize);
+            Com1.write(b"\r\n");
+        }
+    }
     match number {
         1 => syscall_write(pointer, length),
         2 => {
@@ -602,7 +620,17 @@ fn syscall_futex_wait(address: u64, expected: u32, timeout_milliseconds: u64) ->
     if !valid_user_word(address) {
         return u64::MAX;
     }
-    if unsafe { core::ptr::read_volatile(address as *const u32) } != expected {
+    let actual = unsafe { core::ptr::read_volatile(address as *const u32) };
+    {
+        Com1.write(b"debug: futex_wait address=");
+        Com1.write_usize(address as usize);
+        Com1.write(b" expected=");
+        Com1.write_usize(expected as usize);
+        Com1.write(b" actual=");
+        Com1.write_usize(actual as usize);
+        Com1.write(b"\r\n");
+    }
+    if actual != expected {
         return 1; // EAGAIN: the value changed before this thread blocked.
     }
     let Some(thread) = crate::scheduler::current_id() else {
