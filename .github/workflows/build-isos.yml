@@ -111,10 +111,12 @@ jobs:
       - name: Build Limine ISO
         run: nix develop --command scripts/build-limine-iso
 
-      - name: Release ISOs
+      - name: Release boot images
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release-tags.outputs.final_tag }}
           files: |
             build/open-kernel.iso
             build/open-kernel-limine.iso
+            build/open-kernel.elf
+            build/open-kernel-limine.elf
