@@ -76,24 +76,23 @@ jobs:
         working-directory: /home/benedikt/Git/forks/rust-open-kernel
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      # The fork only changes `compiler`/`library`, not `src/llvm-project`,
-      # so download a CI-built LLVM instead of compiling it locally. Falls
-      # back to a local LLVM build automatically if no matching CI artifact
-      # exists for this submodule commit.
-      - name: Configure download-ci-llvm
+      # download-ci-llvm looks up a prebuilt LLVM by commit hash, but HEAD
+      # here is one of the fork's own commits that upstream Rust CI never
+      # built, so it 404s instead of falling back to a local build. Build
+      # LLVM from source instead.
+      - name: Configure bootstrap
         working-directory: /home/benedikt/Git/forks/rust-open-kernel
         run: |
           printf '%s\n' \
             'change-id = "ignore"' \
             '' \
             '[llvm]' \
-            'download-ci-llvm = true' \
+            'download-ci-llvm = false' \
             >> bootstrap.toml
 
-      # Building the OpenKernel stage1 rustc (and, in the worst case, the
-      # LLVM it links against) from scratch is the expensive part of this
-      # job, so cache the resulting stage1 sysroot keyed on the fork's
-      # commit.
+      # Building the OpenKernel stage1 rustc (and the LLVM it links against)
+      # from scratch is the expensive part of this job, so cache the
+      # resulting stage1 sysroot keyed on the fork's commit.
       - name: Cache OpenKernel stage1 rustc
         id: stage1-cache
         uses: actions/cache@v4
