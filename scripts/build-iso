@@ -46,7 +46,9 @@ cargo rustc --manifest-path "$ROOT_DIR/multiboot2-adapter/Cargo.toml" --release 
     -C linker=ld -C link-arg=-melf_x86_64 \
     -C link-arg=-T"$ROOT_DIR/linker.ld" -C link-arg=-nostdlib \
     -C link-arg=-z -C link-arg=max-page-size=0x1000
-(cd "$RUST_FORK" && BOOTSTRAP_SKIP_TARGET_SANITY=1 ./x build library/std --target x86_64-unknown-openkernel)
+# This std library must match the stage1 compiler selected above.  Rust
+# bootstrap requires an explicit stage when CI is set.
+(cd "$RUST_FORK" && BOOTSTRAP_SKIP_TARGET_SANITY=1 ./x build --stage 1 library/std --target x86_64-unknown-openkernel)
 cargo clean --manifest-path "$INIT_MANIFEST" -p init
 RUSTC="$OPENKERNEL_RUSTC" cargo rustc --manifest-path "$INIT_MANIFEST" --release \
     --target x86_64-unknown-openkernel -- -C relocation-model=static -C code-model=small -C linker=ld \
