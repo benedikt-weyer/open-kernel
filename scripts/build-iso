@@ -2,13 +2,12 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-RUST_FORK="/home/benedikt/Git/forks/rust-open-kernel"
 if [ "${OPENKERNEL_NIX_SHELL:-0}" != 1 ]; then
     if ! command -v nix >/dev/null 2>&1; then
         printf 'nix is required to run the OpenKernel stage1 compiler\n' >&2
         exit 1
     fi
-    exec nix develop "$RUST_FORK" --command env OPENKERNEL_NIX_SHELL=1 "$0" "$@"
+    exec nix develop "$ROOT_DIR" --command env OPENKERNEL_NIX_SHELL=1 "$0" "$@"
 fi
 BUILD_DIR="$ROOT_DIR/build"
 ISO_ROOT="$BUILD_DIR/iso-root"
@@ -46,9 +45,6 @@ cargo rustc --manifest-path "$ROOT_DIR/multiboot2-adapter/Cargo.toml" --release 
     -C linker=ld -C link-arg=-melf_x86_64 \
     -C link-arg=-T"$ROOT_DIR/linker.ld" -C link-arg=-nostdlib \
     -C link-arg=-z -C link-arg=max-page-size=0x1000
-# This std library must match the stage1 compiler selected above.  Rust
-# bootstrap requires an explicit stage when CI is set.
-(cd "$RUST_FORK" && BOOTSTRAP_SKIP_TARGET_SANITY=1 ./x build --stage 1 library/std --target x86_64-unknown-openkernel)
 cargo clean --manifest-path "$INIT_MANIFEST" -p init
 RUSTC="$OPENKERNEL_RUSTC" cargo rustc --manifest-path "$INIT_MANIFEST" --release \
     --target x86_64-unknown-openkernel -- -C relocation-model=static -C code-model=small -C linker=ld \
