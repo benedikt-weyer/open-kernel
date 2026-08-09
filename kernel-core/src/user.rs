@@ -152,14 +152,39 @@ extern "C" fn continue_after_stack_switch() -> ! {
     // space must still be current when it runs. Nothing else needs the boot
     // loader's original table afterward — `scheduler::start()` never returns.
     unsafe { switch_address_space(address_space) };
+    {
+        use crate::serial::{Com1, SerialOutput};
+        Com1.write(b"debug: switched to pid1 address space, entry=");
+        Com1.write_usize(loaded.entry as usize);
+        Com1.write(b" stack=");
+        Com1.write_usize(loaded.stack_pointer as usize);
+        Com1.write(b"\r\n");
+    }
     loaded.stack_pointer = initialize_process_stack(loaded.stack_pointer, b"init", &[]);
     if loaded.fs_base != 0 {
         write_user_word(loaded.fs_base, loaded.fs_base);
     }
+    {
+        use crate::serial::{Com1, SerialOutput};
+        Com1.write(b"debug: process stack initialized, new_sp=");
+        Com1.write_usize(loaded.stack_pointer as usize);
+        Com1.write(b"\r\n");
+    }
     crate::scheduler::initialize_user_process(address_space);
-    if crate::scheduler::spawn_user(loaded.entry, 0, loaded.fs_base, Some(loaded.stack_pointer)).is_none() {
+    let thread = crate::scheduler::spawn_user(loaded.entry, 0, loaded.fs_base, Some(loaded.stack_pointer));
+    {
+        use crate::serial::{Com1, SerialOutput};
+        Com1.write(b"debug: spawn_user returned ");
+        Com1.write_usize(thread.map(|t| t + 1).unwrap_or(0));
+        Com1.write(b" (0 = none)\r\n");
+    }
+    if thread.is_none() {
         crate::console::report_startup_failure(ElfError::Paging(PagingError::FrameAllocationFailed));
         crate::halt();
+    }
+    {
+        use crate::serial::{Com1, SerialOutput};
+        Com1.write(b"debug: entering scheduler::start\r\n");
     }
     crate::scheduler::start()
 }

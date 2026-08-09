@@ -756,6 +756,12 @@ unsafe fn next_ready() -> Option<ThreadId> {
 #[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn schedule_from_scheduler() {
     let next = next_ready().unwrap_or(IDLE_THREAD);
+    {
+        use crate::serial::{Com1, SerialOutput};
+        Com1.write(b"debug: schedule_from_scheduler picked ");
+        Com1.write_usize(next);
+        Com1.write(b"\r\n");
+    }
     CURRENT_THREAD = next;
     (*(&raw mut THREADS))[next].state = ThreadState::Running;
     scheduler_context_switch(
@@ -824,6 +830,15 @@ extern "C" fn user_thread_trampoline() {
             && let Some(address_space) = process_address_space(process)
         {
             crate::switch_address_space(address_space);
+        }
+        {
+            use crate::serial::{Com1, SerialOutput};
+            let context = current_user_context();
+            Com1.write(b"debug: user_thread_trampoline resuming rip=");
+            Com1.write_usize((*context).rip as usize);
+            Com1.write(b" rsp=");
+            Com1.write_usize((*context).rsp as usize);
+            Com1.write(b"\r\n");
         }
         crate::arch::resume_user_context(current_user_context());
     }
