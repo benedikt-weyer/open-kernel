@@ -1,10 +1,20 @@
+use core::arch::asm;
+
 use crate::{
-    ElfError, LoadedImage, PAGE_SIZE, PageFlags, PagingError, allocate_physical_frame,
-    create_user_address_space, load_user_elf_into, map_user_page_with_flags, switch_address_space,
-    vfs_open, zero_physical_frame,
+    ElfError, LoadedImage, PAGE_SIZE, PageFlags, PagingError, allocate_kernel_stack,
+    allocate_physical_frame, create_user_address_space, load_user_elf_into, map_user_page_with_flags,
+    switch_address_space, vfs_open, zero_physical_frame,
 };
 
+/// A kernel-stack slot dedicated to carrying boot execution across the
+/// switch to PID 1's own address space (see [`run_demo`]). Distinct from
+/// every slot `threads.rs` hands out (kernel stacks on `0..MAX_THREADS`,
+/// syscall stacks on `MAX_THREADS..2*MAX_THREADS`), so it can never collide
+/// with a real thread's stack.
+const BOOT_STACK_SLOT: usize = 100;
+
 static mut USER_IMAGE: Option<LoadedImage> = None;
+static mut PENDING_ADDRESS_SPACE: u64 = 0;
 const USER_HEAP_BASE: u64 = 0x0000_5000_0000_0000;
 const USER_HEAP_LIMIT: u64 = 0x0000_7000_0000_0000;
 static mut USER_HEAP_BREAK: u64 = USER_HEAP_BASE;
@@ -95,9 +105,10 @@ pub fn run_demo() -> Result<(), ElfError> {
     // huge pages (e.g. r-boot's first-4GB 2M window), which collide with the
     // ELF's link-time virtual addresses in the same low range.
     let address_space = create_user_address_space()?;
-    let mut loaded = load_user_elf_into(image, address_space, 0)?;
+    let loaded = load_user_elf_into(image, address_space, 0)?;
     unsafe {
         USER_IMAGE = Some(loaded);
+        PENDING_ADDRESS_SPACE = address_space;
         USER_HEAP_BREAK = USER_HEAP_BASE;
         USER_HEAP_MAPPED_END = USER_HEAP_BASE;
         for index in 0..MAX_FDS {
@@ -118,6 +129,24 @@ pub fn run_demo() -> Result<(), ElfError> {
             core::ptr::write_volatile(&raw mut PROCESS_STATE[0].descriptors[index], Descriptor::EMPTY);
         }
     }
+    // The code below switches to PID 1's own address space, which unmaps
+    // whatever low, boot-loader-inherited memory the stack we're currently
+    // running on lives in (e.g. r-boot hands off on UEFI's own stack, backed
+    // only by its first-4GB identity map). Move onto a dedicated kernel
+    // stack in the canonical shared region first — it stays mapped in every
+    // address space, including the new one, since `create_user_address_space`
+    // copies the shared upper half — so nothing (not even an interrupt
+    // firing mid-setup) faults on the stack we vacate.
+    let boot_stack_top = allocate_kernel_stack(BOOT_STACK_SLOT)?;
+    unsafe { switch_stack_and_call(boot_stack_top, continue_after_stack_switch) }
+}
+
+/// Runs on `BOOT_STACK_SLOT`'s stack after [`run_demo`] hands off to it.
+/// Reads back the state `run_demo` stashed in statics before switching,
+/// since none of its locals survive the stack switch.
+extern "C" fn continue_after_stack_switch() -> ! {
+    let address_space = unsafe { PENDING_ADDRESS_SPACE };
+    let mut loaded = unsafe { USER_IMAGE.expect("run_demo: pending image missing after stack switch") };
     // Left active deliberately: `spawn_user` below validates the entry point
     // and TLS base against the *currently active* CR3, so PID 1's address
     // space must still be current when it runs. Nothing else needs the boot
@@ -128,9 +157,23 @@ pub fn run_demo() -> Result<(), ElfError> {
         write_user_word(loaded.fs_base, loaded.fs_base);
     }
     crate::scheduler::initialize_user_process(address_space);
-    crate::scheduler::spawn_user(loaded.entry, 0, loaded.fs_base, Some(loaded.stack_pointer))
-        .ok_or(PagingError::FrameAllocationFailed)?;
+    if crate::scheduler::spawn_user(loaded.entry, 0, loaded.fs_base, Some(loaded.stack_pointer)).is_none() {
+        crate::console::report_startup_failure(ElfError::Paging(PagingError::FrameAllocationFailed));
+        crate::halt();
+    }
     crate::scheduler::start()
+}
+
+unsafe fn switch_stack_and_call(new_rsp: u64, target: extern "C" fn() -> !) -> ! {
+    unsafe {
+        asm!(
+            "mov rsp, {new_rsp}",
+            "call {target}",
+            new_rsp = in(reg) new_rsp,
+            target = in(reg) target,
+            options(noreturn)
+        );
+    }
 }
 
 pub fn executable_metadata() -> ExecutableMetadata {

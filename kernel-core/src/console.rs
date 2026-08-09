@@ -155,13 +155,17 @@ pub fn boot(info: BootInfo) -> ! {
     }
     if matches!(info.status, BootStatus::Ready) {
         if let Err(error) = crate::user::run_demo() {
-            Com1.write(b"open-kernel: could not start user process: ");
-            Com1.write(elf_error_message(error));
-            Com1.write(b"\r\n");
+            report_startup_failure(error);
         }
     }
 
     X86_64::halt()
+}
+
+pub(crate) fn report_startup_failure(error: crate::ElfError) {
+    Com1.write(b"open-kernel: could not start user process: ");
+    Com1.write(elf_error_message(error));
+    Com1.write(b"\r\n");
 }
 
 fn elf_error_message(error: crate::ElfError) -> &'static [u8] {
