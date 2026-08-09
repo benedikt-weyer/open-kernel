@@ -234,10 +234,8 @@ pub fn spawn(entry: TaskEntry) -> Option<ThreadId> {
     None
 }
 
-pub fn initialize_user_process() {
+pub fn initialize_user_process(address_space: u64) {
     unsafe {
-        let address_space: u64;
-        asm!("mov {}, cr3", out(reg) address_space, options(nomem, nostack));
         (*(&raw mut PROCESSES))[0] = Process {
             id: USER_PROCESS_ID, address_space, parent: None, main_thread: None,
         };

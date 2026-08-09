@@ -1,6 +1,7 @@
 use crate::{
     ElfError, LoadedImage, PAGE_SIZE, PageFlags, PagingError, allocate_physical_frame,
-    load_user_elf, map_user_page_with_flags, vfs_open, zero_physical_frame,
+    create_user_address_space, load_user_elf_into, map_user_page_with_flags, switch_address_space,
+    vfs_open, zero_physical_frame,
 };
 
 static mut USER_IMAGE: Option<LoadedImage> = None;
@@ -89,7 +90,12 @@ fn current_state_slot() -> usize {
 
 pub fn run_demo() -> Result<(), ElfError> {
     let image = vfs_open("/init").ok_or(ElfError::InvalidHeader)?;
-    let mut loaded = load_user_elf(image)?;
+    // PID 1 gets its own address space rather than reusing the boot loader's
+    // active page tables: those still carry the loader's own identity-mapped
+    // huge pages (e.g. r-boot's first-4GB 2M window), which collide with the
+    // ELF's link-time virtual addresses in the same low range.
+    let address_space = create_user_address_space()?;
+    let mut loaded = load_user_elf_into(image, address_space, 0)?;
     unsafe {
         USER_IMAGE = Some(loaded);
         USER_HEAP_BREAK = USER_HEAP_BASE;
@@ -112,11 +118,16 @@ pub fn run_demo() -> Result<(), ElfError> {
             core::ptr::write_volatile(&raw mut PROCESS_STATE[0].descriptors[index], Descriptor::EMPTY);
         }
     }
+    // Left active deliberately: `spawn_user` below validates the entry point
+    // and TLS base against the *currently active* CR3, so PID 1's address
+    // space must still be current when it runs. Nothing else needs the boot
+    // loader's original table afterward — `scheduler::start()` never returns.
+    unsafe { switch_address_space(address_space) };
     loaded.stack_pointer = initialize_process_stack(loaded.stack_pointer, b"init", &[]);
     if loaded.fs_base != 0 {
         write_user_word(loaded.fs_base, loaded.fs_base);
     }
-    crate::scheduler::initialize_user_process();
+    crate::scheduler::initialize_user_process(address_space);
     crate::scheduler::spawn_user(loaded.entry, 0, loaded.fs_base, Some(loaded.stack_pointer))
         .ok_or(PagingError::FrameAllocationFailed)?;
     crate::scheduler::start()
