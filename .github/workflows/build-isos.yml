@@ -47,13 +47,13 @@ jobs:
         uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Download OpenKernel toolchain
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           archive=open-kernel-stage1-x86_64-unknown-linux-gnu.tar.gz
+          archive_url=https://github.com/benedikt-weyer/rust-open-kernel/releases/download/open-kernel-toolchain-e47537c0251d70b7b6c243c135ada65ed6b8a6be/open-kernel-stage1-x86_64-unknown-linux-gnu.tar.gz
           toolchain="$RUNNER_TEMP/open-kernel-toolchain"
           mkdir -p "$toolchain"
-          gh release download --repo benedikt-weyer/rust-open-kernel --pattern "$archive" --pattern "$archive.sha256" --dir "$toolchain"
+          curl --fail --location --retry 3 --output "$toolchain/$archive" "$archive_url"
+          curl --fail --location --retry 3 --output "$toolchain/$archive.sha256" "$archive_url.sha256"
           (cd "$toolchain" && sha256sum --check "$archive.sha256")
           tar -xzf "$toolchain/$archive" -C "$toolchain"
           echo "OPENKERNEL_RUSTC=$toolchain/stage1/bin/rustc" >> "$GITHUB_ENV"
