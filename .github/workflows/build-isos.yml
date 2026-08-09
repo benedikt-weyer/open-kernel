@@ -73,3 +73,6 @@ jobs:
             build/open-kernel-limine.iso
             build/open-kernel.elf
             build/open-kernel-limine.elf
+            build/init.elf
+            build/console.elf
+            build/std-smoke.elf

@@ -13,6 +13,8 @@ BUILD_DIR="$ROOT_DIR/build"
 ISO_ROOT="$BUILD_DIR/limine-iso-root"
 KERNEL="$BUILD_DIR/open-kernel-limine.elf"
 INIT_STAGED="$BUILD_DIR/init.elf"
+CONSOLE_STAGED="$BUILD_DIR/console.elf"
+STD_SMOKE_STAGED="$BUILD_DIR/std-smoke.elf"
 ISO="$BUILD_DIR/open-kernel-limine.iso"
 INIT_MANIFEST="$ROOT_DIR/init/Cargo.toml"
 INIT_BINARY="$ROOT_DIR/target/x86_64-unknown-openkernel/release/init"
@@ -63,13 +65,15 @@ if [ "$OPENKERNEL_STD" = 1 ]; then
 fi
 cp "$ROOT_DIR/target/release/limine-adapter" "$KERNEL"
 cp "$INIT_BINARY" "$INIT_STAGED"
+cp "$CONSOLE_BINARY" "$CONSOLE_STAGED"
 
 cp "$KERNEL" "$ISO_ROOT/boot/open-kernel-limine.elf"
 cp "$INIT_STAGED" "$ISO_ROOT/boot/init.elf"
-cp "$CONSOLE_BINARY" "$ISO_ROOT/boot/console.elf"
+cp "$CONSOLE_STAGED" "$ISO_ROOT/boot/console.elf"
 cp "$ROOT_DIR/limine.conf" "$ISO_ROOT/boot/limine/limine.conf"
 if [ "$OPENKERNEL_STD" = 1 ]; then
-    cp "$ROOT_DIR/target/x86_64-unknown-openkernel/release/openkernel-std-smoke" "$ISO_ROOT/boot/std-smoke.elf"
+    cp "$ROOT_DIR/target/x86_64-unknown-openkernel/release/openkernel-std-smoke" "$STD_SMOKE_STAGED"
+    cp "$STD_SMOKE_STAGED" "$ISO_ROOT/boot/std-smoke.elf"
     printf 'module_path: boot():/boot/std-smoke.elf\nmodule_string: std-smoke\n' >> "$ISO_ROOT/boot/limine/limine.conf"
 fi
 cp "$LIMINE_DIR/limine-bios.sys" "$ISO_ROOT/boot/limine/limine-bios.sys"

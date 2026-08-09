@@ -153,11 +153,31 @@ pub fn boot(info: BootInfo) -> ! {
     } else if matches!(info.display, Display::VgaText) {
         paint_vga(info.bootloader.as_bytes(), info.status);
     }
-    if matches!(info.status, BootStatus::Ready) && crate::user::run_demo().is_err() {
-        Com1.write(b"open-kernel: could not start user process\r\n");
+    if matches!(info.status, BootStatus::Ready) {
+        if let Err(error) = crate::user::run_demo() {
+            Com1.write(b"open-kernel: could not start user process: ");
+            Com1.write(elf_error_message(error));
+            Com1.write(b"\r\n");
+        }
     }
 
     X86_64::halt()
+}
+
+fn elf_error_message(error: crate::ElfError) -> &'static [u8] {
+    match error {
+        crate::ElfError::InvalidHeader => b"missing /init or invalid ELF header",
+        crate::ElfError::UnsupportedExecutable => b"unsupported executable format",
+        crate::ElfError::InvalidProgramHeader => b"invalid ELF program header",
+        crate::ElfError::InvalidSegment => b"invalid ELF load segment",
+        crate::ElfError::NoExecutableSegment => b"no executable ELF segment",
+        crate::ElfError::Paging(error) => match error {
+            crate::PagingError::FrameAllocationFailed => b"out of physical frames",
+            crate::PagingError::HugePageConflict => b"page-table huge-page conflict",
+            crate::PagingError::AlreadyMapped => b"user page already mapped",
+            crate::PagingError::InvalidUserAddress => b"invalid user virtual address",
+        },
+    }
 }
 
 /// Renders `text` to `tty`'s virtual terminal, blitting to the real screen
